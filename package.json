@@ -1,0 +1,94 @@
+{
+  "name": "@ubercode/multipart-stream",
+  "version": "0.1.0",
+  "description": "Streaming consumer for multipart/related HTTP responses with idle/total timeout, AbortSignal, and cleanup-safe async iteration.",
+  "keywords": [
+    "multipart",
+    "multipart/related",
+    "streaming",
+    "fetch",
+    "async-iterator",
+    "node"
+  ],
+  "license": "MIT",
+  "author": "Michael Hobbs <michael.lee.hobbs@gmail.com>",
+  "homepage": "https://github.com/MichaelLeeHobbs/multipart-stream",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MichaelLeeHobbs/multipart-stream.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MichaelLeeHobbs/multipart-stream/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "pnpm run clean && tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier . --check",
+    "format:fix": "prettier . --write",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "check:attw": "attw --pack",
+    "publish:check": "pnpm run check && pnpm run build && pnpm run check:attw && pnpm pack --json",
+    "prepublishOnly": "pnpm run check && pnpm run build",
+    "version:major": "pnpm version major",
+    "version:minor": "pnpm version minor",
+    "version:patch": "pnpm version patch"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "dicer": "0.3.1"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.0",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.0.0",
+    "eslint-import-resolver-typescript": "^3.6.0",
+    "eslint-plugin-import": "^2.30.0",
+    "eslint-plugin-simple-import-sort": "^12.0.0",
+    "prettier": "^3.0.0",
+    "rimraf": "^6.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  },
+  "packageManager": "pnpm@10.0.0"
+}

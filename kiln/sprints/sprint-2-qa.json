@@ -1,0 +1,213 @@
+{
+  "sprintId": 2,
+  "verdict": "PASS",
+  "standardsDriftFromGenerator": false,
+  "regressionGate": {
+    "status": "clean",
+    "notes": "pnpm test exits 0 with 13 test files / 101 tests passing (vs Sprint 1's 6 files / 55 tests; net delta +7 files / +46 tests). Every Sprint 1 test file is preserved verbatim except tests/integration/sprint-1-stubs.test.ts which legitimately changed because parseMultipartRelated is no longer a stub (Sprint 5's fetchAndHandleMultipart marker is preserved). No Sprint 1 test was deleted or renamed without justification. Standards SHA-256 (concat order: architecture, error-handling, api-conventions, coding, testing) computes to 20cfb545a20814a0e711722c0606e1bc0d5631855f175e89bdbe06aa5be2c9cf — exactly matches the generator's standardsHash."
+  },
+  "successCriteria": [
+    {
+      "id": 1,
+      "summary": "pnpm build exit 0; parseMultipartRelated is a real function (Symbol.asyncIterator + next/return/throw) — NO stub throw",
+      "status": "pass",
+      "evidence": [
+        "`pnpm build` exits 0; emits dist/index.js (14.53 KB), dist/index.cjs (15.11 KB), dist/index.d.ts (26.92 KB), dist/index.d.cts (26.92 KB), and source maps. No extra files (T-040).",
+        "Runtime spot-check: 12-symbol export probe against dist/index.js exits with 'OK' — every public name is `function` (parseMultipartRelated, fetchAndHandleMultipart, streamToString, streamToBuffer, extractBoundary, and the 7 error classes).",
+        "Real-envelope spot-check: dist/index.js's parseMultipartRelated against a 1-part multipart/related Response yields `index=0, contentType='text/plain'` (count=1) — proves the function is no longer the Sprint 1 'not yet implemented' stub.",
+        "The async-generator returned by parseMultipartRelated has Symbol.asyncIterator, .next, .return, .throw — verified at tests/integration/sprint-1-stubs.test.ts:35-38 (T-023, FR-001).",
+        "fetchAndHandleMultipart is STILL the Sprint 5 stub (rejects with 'fetchAndHandleMultipart: not yet implemented (Sprint 5)') — verified via runtime probe and tests/integration/sprint-1-stubs.test.ts:47-57.",
+        "T-071 invariant preserved: zero matches for `from 'dicer'` or `import.*dicer` in dist/index.d.ts AND dist/index.d.cts."
+      ]
+    },
+    {
+      "id": 2,
+      "summary": "Integration tests T-001/T-004/T-005/T-022/T-024/T-025/T-053/T-056/T-057 all pass",
+      "status": "pass",
+      "evidence": [
+        "T-001 (3-part envelope, lowercased headers, in-order): tests/integration/parse-multipart-related.test.ts:50-87 — asserts 3 parts, correct contentType + contentId + body for each.",
+        "T-004 (Web ReadableStream → Readable.fromWeb, no `as never`): tests/integration/parse-multipart-related.test.ts:89-103. Static gate verified: src/internal/normalize-input.ts:114 uses `body as unknown as WebReadableStream<Uint8Array>` — NOT `as never`.",
+        "T-005 (raw Readable + boundary): tests/integration/parse-multipart-related.test.ts:144-166.",
+        "T-022 (sync dicer error from first .next() — proves listeners pre-pipe): tests/integration/parse-multipart-related.test.ts:182-199. Implementation at src/parse-multipart-related.ts:235-242 attaches all dicer + source listeners BEFORE source.pipe(dicer).",
+        "T-024 (Response + Readable yield same content): tests/integration/parse-multipart-related.test.ts:105-140.",
+        "T-025 (Readable without boundary throws): tests/integration/parse-multipart-related.test.ts:168-178.",
+        "T-053 (Response missing Content-Type): tests/integration/parse-multipart-related.test.ts:372-398 — duck-typed Response shape (the WHATWG fetch impl auto-stamps Content-Type, so the test cannot use `new Response()` directly; the duck-typing fallback in normalize-input.ts:53-65 is exercised here).",
+        "T-056 (no Content-ID → contentId: undefined): tests/integration/parse-multipart-related.test.ts:203-224.",
+        "T-057 (header capitalization → lowercased): tests/integration/parse-multipart-related.test.ts:226-256.",
+        "All 13 tests in parse-multipart-related.test.ts pass (verified via `pnpm test` output)."
+      ]
+    },
+    {
+      "id": 3,
+      "summary": "Synchronous validation T-002/T-003/T-025 — first .next() rejects with the spec-mandated error message",
+      "status": "pass",
+      "evidence": [
+        "T-002 (null body): tests/integration/parse-validation.test.ts:8-18 — asserts /response body is null/. Throw site at src/internal/normalize-input.ts:103.",
+        "T-003 (Content-Type without boundary parameter): tests/integration/parse-validation.test.ts:20-28 — asserts /boundary parameter missing from Content-Type/. Throw site is in src/extract-boundary.ts (Sprint 1 helper); error message preserved.",
+        "T-025 (Readable without boundary): covered above (parse-multipart-related.test.ts:168-178), asserts /boundary option is required/. Throw site at src/internal/normalize-input.ts:121-123.",
+        "Bonus FR-004 cross-check at parse-validation.test.ts:30-38 — empty `boundary=` rejects with /boundary parameter is empty in Content-Type/.",
+        "Validation throws are synchronous-from-iter.next() per the async-generator contract. The wrapper at src/parse-multipart-related.ts:100-105 returns the generator-function call result; the validation throws inside the generator body at line 124-126 surface from the first `.next()` (per the planner brief's explicit clarification that async generators can't truly throw at construction).",
+        "formatErrorEmbed wiring: the Sprint 1 truncate-only stub inlined into extract-boundary.ts (per Sprint 1 QA) covers the Content-Type-related embed sites used here. Sprint 2 did not regress this; the Sprint 7 full implementation backfills control-char/ANSI redact + JSON.stringify."
+      ]
+    },
+    {
+      "id": 4,
+      "summary": "T-007 partial — PartParser harness proves StreamingMultipartPart drives a parser callback",
+      "status": "pass",
+      "evidence": [
+        "tests/integration/parse-parser-harness.test.ts:35-77 — 'parser returning undefined for some parts contributes nothing for those'. Drives `for await (part of parseMultipartRelated(...))` + `await parser(part)` exactly mirroring the planned Sprint 5 fetchAndHandleMultipart loop.",
+        "tests/integration/parse-parser-harness.test.ts:78-97 — 'parser returning a value for every part yields one entry per part'.",
+        "Both tests are real (not skipped, not it.todo). The full FR-014 contract (parser-throw cleanup) is correctly deferred to Sprint 5 per the comment at lines 17-21."
+      ]
+    },
+    {
+      "id": 5,
+      "summary": "T-014 partial — onProgress fires at least once per yielded part with monotonic bytes + finite rateBps",
+      "status": "pass",
+      "evidence": [
+        "tests/integration/parse-progress.test.ts:16-63 — asserts `onProgress.mock.calls.length >= 3` for a 3-part envelope, monotonic non-decreasing `snap.bytes`, finite `snap.rateBps`, non-negative `snap.elapsedMs`.",
+        "Bonus: tests/integration/parse-progress.test.ts:65-102 covers the err-not-Error fallback branch (onProgress throws a string, logger meta gets `errSummary.name === 'Error'`).",
+        "Bonus: tests/integration/parse-progress.test.ts:104-148 — the FR-017 onProgress-catch site routes through logger and parsing continues. Implementation at src/parse-multipart-related.ts:152-164.",
+        "Completion-tick assertion is correctly DEFERRED to Sprint 5 (planner's success criterion #5: 'completion-tick assertion lands in Sprint 5 once fetchAndHandleMultipart owns wallclock'). The deferral is documented inline at parse-progress.test.ts:39-40."
+      ]
+    },
+    {
+      "id": 6,
+      "summary": "pnpm check exits 0; ≥90% branch coverage on parse-multipart-related.ts and queue-notifier.ts; FR-DR-A-028 normalization preserved",
+      "status": "pass",
+      "evidence": [
+        "`pnpm check` (lint + typecheck + vitest) exits 0. Lint clean under --max-warnings=0; typecheck clean.",
+        "Coverage report: src/parse-multipart-related.ts at 100% statements / 100% branches / 100% functions / 100% lines (well above the ≥90% gate).",
+        "Coverage report: src/internal/queue-notifier.ts at 100% statements / 100% branches / 100% functions / 100% lines.",
+        "FR-DR-A-028 normalization preserved verbatim: src/parse-multipart-related.ts:57-58 reads `const Dicer: DicerDefaultExport = (dicerMod as { default?: DicerDefaultExport }).default ?? dicerMod;` — semantically identical to the Sprint 1 form (typed cast, no `as any`, no `as never`). Sprint 2's only delta is comment expansion + import-sort reordering of surrounding statements (autofix during `pnpm lint:fix`); the normalization expression itself is byte-identical.",
+        "Per-file ESLint override added at eslint.config.mjs:92-108 disabling max-lines-per-function for parse-multipart-related.ts and queue-notifier.ts — same precedent as Sprint 1's extract-boundary.ts override; reasoning documented inline."
+      ]
+    }
+  ],
+  "rubric": {
+    "functionalCorrectness": {
+      "score": 3,
+      "rationale": "Build green; pnpm test 13/13 files / 101/101 tests pass (no skipped/todo/regression); 12-symbol export surface still loads on dist/index.js; parseMultipartRelated yields a real part on a real envelope (count=1, index=0, contentType=text/plain); fetchAndHandleMultipart preserved as the Sprint 5 stub. Pack manifest STILL exactly { dist/, README.md, LICENSE, package.json } (NFR-008 invariant); package.json#dependencies.dicer === '0.3.1' exact; dist/index.d.ts + dist/index.d.cts both have zero `from 'dicer'` matches (T-071 invariant). All 9 Sprint 2-mandated integration tests + 3 sync-validation tests + 2 PartParser harness tests + 3 onProgress tests pass. Coverage 100%/100% on parse-multipart-related.ts and queue-notifier.ts (≥90% gate met). Zero critical bugs."
+    },
+    "codeQuality": {
+      "score": 3,
+      "rationale": "Standards compliance verified: zero `any` / `as never` / `as any` casts in src/ (only matches are JSDoc/comments); zero silent catches in src/ (only catch site is src/parse-multipart-related.ts:152-164 which routes through the configured logger per FR-017); imports are sorted (simple-import-sort), kebab-case file names, type imports use `import type`, .js extensions on imports. FR-012 listener-before-pipe correctly implemented at src/parse-multipart-related.ts:235-242 (dicer.on('part'/'finish'/'error') + source.on('data'/'error') ALL precede source.pipe(dicer) at line 242). FR-DR-A-028 normalization preserved verbatim from Sprint 1. Logger usage is event-style {level, msg, meta} per FR-018/JC-2. The async-generator validation pattern (validation throws inside the generator body so they surface from .next()) matches the planner's explicit clarification. Minor nits only (see minorIssues)."
+    },
+    "specAdherence": {
+      "score": 3,
+      "rationale": "StreamingMultipartPart shape matches data-model.md §1.1 (index/boundary/headers/contentType/contentId/contentLength/body — plus the rawHeaders Sprint 1 carry-over which is currently `Buffer.alloc(0)`; not a regression). FR-001 (async-iterator return type), FR-002 (Response | Readable inputs), FR-003 (Readable.fromWeb conversion via typed cast — NOT `as never`), FR-004 (synchronous validation), FR-012 (listeners before pipe), FR-013 (onProgress per part), FR-014 (PartParser shape via the harness, full contract deferred to Sprint 5) all implemented per their text. Sprint 3/4/5/6/7 work is clearly NOT silently included: the finally block carries a `TODO(Sprint 3)` marker at parse-multipart-related.ts:253-257 (cleanup deferred); idleTimeoutMs/totalTimeoutMs are accepted in the type but no validatePositiveTimeout call exists yet (Sprint 4 owns that); no TimerState wiring; no truncation detection; no resource caps; no AbortSignal handling. All deferrals tracked in sprint-2-report.json knownIssues[]."
+    },
+    "completeness": {
+      "score": 3,
+      "rationale": "All 6 success criteria from sprints/plan.json id=2 verified pass (see successCriteria[] above). Every FR allocated to Sprint 2 (FR-001..FR-004, FR-012, FR-013, FR-014) has implementing code AND a real test. Coverage gate (≥90% branch on parse-multipart-related.ts and queue-notifier.ts) met at 100%/100%. Deferrals are explicit and tracked in knownIssues[] (cleanup-on-finally, truncation, timeouts, abort, caps, full PartParser contract, fetchAndHandleMultipart stub, formatErrorEmbed full impl). Standards hash matches the generator's standardsHash exactly — no drift between generator and evaluator inputs."
+    },
+    "designQuality": {
+      "applicable": false,
+      "score": null,
+      "rationale": "Not applicable — this is a Node library project with no UI surface."
+    }
+  },
+  "criticalBugs": [],
+  "minorIssues": [
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 200,
+      "severity": "trivial",
+      "description": "StreamingMultipartPart.rawHeaders is set to `Buffer.alloc(0)` — the rawHeaders field is a Sprint 1 carry-over in the public type but is not yet populated with actual raw header bytes. The data-model.md doesn't mandate Sprint 2 populate it (the field's JSDoc at src/types.ts:55-59 explicitly notes 'Sprint 2+ populates this; Sprint 1 declares the shape only'), so this is a documentation/follow-up gap rather than a bug. No test asserts non-empty rawHeaders. Recommend a future sprint either populate it or strip it from the public surface."
+    },
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 207,
+      "severity": "trivial",
+      "description": "`partStream as unknown as Readable` — a double-cast to bridge the ambient shim's narrowed `.on()` overloads with the public Readable type. Documented in sprint-2-report.json assumption #2 (the runtime shape is correct: dicer's PartStream genuinely extends Node Readable). Not flagged as `as any` or `as never`, but `as unknown as` is a code-smell pattern; widening the shim's DicerPartStream.on overloads would remove the need. Tracked as a known design tradeoff per the assumption."
+    },
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 252,
+      "severity": "minor",
+      "description": "The finally block is intentionally empty (only a TODO comment for Sprint 3). For Sprint 2 this is correct per the planner's explicit deferral, but anyone reading the file in isolation might miss that `cleanup-on-finally` is a Sprint 3 deliverable. The TODO comment at lines 253-257 is clear and references Sprint 3 + FR-010, so this is acceptable per the deferral contract."
+    },
+    {
+      "file": "src/internal/flatten-headers.ts",
+      "line": 47,
+      "severity": "trivial",
+      "description": "Lines 47-52 (the primitive-fallback branch and the unknown-shape catch-all) are partially uncovered (coverage report shows lines 48-52 uncovered; 86.2% statements / 83.3% branches on this file). Not a Sprint 2 success criterion (coverage gate is on parse-multipart-related.ts and queue-notifier.ts only), but worth flagging so a later sprint can either drop the dead branch or test it. The file's primary path is fully covered."
+    }
+  ],
+  "assumptionsReview": [
+    {
+      "context": "Header event shape — dicer 0.3.1 emits Record<string, string[]> at runtime; the ambient shim documents the broader Buffer | Buffer[] | Buffer[][] shape",
+      "choice": "flattenDicerHeaders accepts Record<string, unknown> and dispatches on Buffer.isBuffer / Array.isArray / typeof === 'string'; works for both shapes",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Real tests prove it works for the actual dicer 0.3.1 Record<string, string[]> shape (T-001 / T-057 yield correct lowercased values). The ambient shim's broader shape is also covered (tests/unit/flatten-headers.test.ts lines 28-41 exercise Buffer + Buffer[] + nested arrays). The defensive dispatch is the right tradeoff between forward-compat and current correctness; no latent bug."
+    },
+    {
+      "context": "Sprint 2's finally block is intentionally minimal — full FR-010 cleanup deferred to Sprint 3",
+      "choice": "TODO(Sprint 3) marker at src/parse-multipart-related.ts:253-257; no listener removal / source destroy / drain unyielded parts / late-emit dicer 'error' retention",
+      "judgment": "ACCEPTABLE",
+      "rationale": "The TODO comment is in code at the exact location Sprint 3 will modify; it explicitly references FR-010 + Sprint 3. Sprint 3's deferred work is thus clearly marked. Resource-Leak Hygiene Suite test rows (T-008/T-015/T-027/T-068) are correctly NOT silently asserted now."
+    },
+    {
+      "context": "parseMultipartRelated accepts idleTimeoutMs/totalTimeoutMs in the type but does not yet enforce them",
+      "choice": "FR-006 type contract preserved (both fields required on ParseMultipartOptions); no validatePositiveTimeout call exists; no TimerState wiring",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Per Sprint 2 plan technicalNotes: 'NO timer wiring this sprint (idleTimeoutMs/totalTimeoutMs accepted in opts but not yet enforced — Sprint 4 lands the validatePositiveTimeout call + TimerState wiring; T-026b will then pass).' Verified: src/parse-multipart-related.ts has zero references to validatePositiveTimeout, TimerState, or timer setTimeout/clearTimeout. The type accepts both timeouts as required (no `?`) so callers writing code now will be forward-compat."
+    },
+    {
+      "context": "No new devDependencies added in Sprint 2",
+      "choice": "package.json devDependencies unchanged from Sprint 1",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified: package.json#dependencies.dicer is still '0.3.1' exact; no devDeps added; ESLint resolver already had eslint-import-resolver-typescript from Sprint 1. Toolchain-only changes are limited to per-file ESLint overrides in eslint.config.mjs:92-108 (non-blocking)."
+    },
+    {
+      "context": "T-053 (missing Content-Type on Response) — WHATWG fetch auto-stamps Content-Type so a real Response can't exercise the genuinely-missing case",
+      "choice": "Built a duck-typed Response shape whose .headers.get('content-type') returns null; normalize-input.ts uses duck-typing fallbacks at lines 53-65",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Pragmatic workaround for a fixture-only limitation. The duck-typing fallback is also a defensive feature for non-standard Response polyfills; it's not test-only code. The test at parse-multipart-related.test.ts:372-398 documents the fixture limitation in a comment."
+    },
+    {
+      "context": "onProgress fires at queue-time (when the part is pushed in the dicer 'header' listener) rather than at yield-time",
+      "choice": "fireProgress() is called immediately after queue.push at src/parse-multipart-related.ts:213",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Fires 'at least once per yielded part' (FR-013) literally — every queue push corresponds to one yield. The bytes value at queue-time reflects bytes-at-header-end rather than bytes-at-yield-time, but FR-013 wording does not pin the exact moment. Sprint 5 adds the completion-tick fire at the wallclock-owning layer (fetchAndHandleMultipart). No latent bug; no test contradicts this choice."
+    },
+    {
+      "context": "T-022 (synchronous dicer error) is technically delivered on the next tick by dicer's process.nextTick wrapper, not synchronously",
+      "choice": "Test asserts iter.next() rejects with /Unexpected end of multipart data/; the listener-attached-before-pipe invariant is genuinely tested",
+      "judgment": "ACCEPTABLE",
+      "rationale": "The test's purpose is to verify the listener wiring order, not strict synchronous timing. If the listener had been attached after pipe(), Node would have emitted an unhandled 'error' event and crashed the process before vitest could observe the rejection. The test's comment at parse-multipart-related.test.ts:188-193 explains this clearly."
+    },
+    {
+      "context": "Sprint 2 test count grew from 55 to 101 (delta +46); Sprint 1 had 6 test files, Sprint 2 has 13 (delta +7)",
+      "choice": "Aimed for 100% branch coverage on the 2 mandated files; added enough tests to hit 100% on both",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Sprint 2 brief did not specify exact counts. Coverage gate (≥90% on parse-multipart-related.ts + queue-notifier.ts) met at 100%/100%. Other Sprint 2 Coverage Map rows (T-001/T-002/T-003/T-004/T-005/T-022/T-024/T-025/T-053/T-056/T-057 + T-007 partial + T-014 partial) all green."
+    },
+    {
+      "context": "tests/integration/parse-cleanup.test.ts NOT created this sprint (was mentioned in original brief with .skip stubs)",
+      "choice": "Did NOT create the file; Sprint 3 will create it from scratch",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Empty .skip stubs are noise; Sprint 3 has to author the descriptions when the cleanup paths land anyway. No current test relies on this file's existence. Sprint 3 will own creation."
+    },
+    {
+      "context": "import-sort autofix reordered imports in parse-multipart-related.ts; FR-DR-A-028 normalization expression is byte-identical but surrounding context shifted",
+      "choice": "Accepted the import-sort rewrite; verified the normalization expression at line 57-58 is byte-identical to Sprint 1's line 50-51",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Confirmed via grep: the line `(dicerMod as { default?: DicerDefaultExport }).default ?? dicerMod` is preserved verbatim. Sprint 1 QA's evidence #5 cited the Sprint 1 line; the Sprint 2 line is semantically identical. Sprint 8's T-052 cross-format consumer test will exercise this at runtime."
+    },
+    {
+      "context": "tests/fixtures/start-multipart-server.ts (planned in test-plan.md Conventions) does NOT exist yet",
+      "choice": "Sprint 2 tests use Readable.from(buf) and `new Response(buf)` instead; Sprint 5 will create the http-server fixture",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Sprint 5 is the first sprint that needs an http server (for fetchAndHandleMultipart end-to-end testing). Sprint 2's tests don't need network; in-memory Readable + Response satisfy every Sprint 2 assertion."
+    },
+    {
+      "context": "The async-generator validation pattern: the wrapper is non-async and returns the generator-function call result; validation throws live at the top of the generator body so they surface from the first .next()",
+      "choice": "Two-overload exported wrapper (Response, Readable) calls a single internal `parseMultipartRelatedImpl` async generator; validation lives inside",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Matches the planner's explicit clarification ('async generators cannot truly throw synchronously at construction in vitest's contract'). T-002/T-003/T-025/T-053 all assert via iter.next() + .rejects.toThrow(...) and pass. The alternative (sync throw at the wrapper site) would have broken the AsyncGenerator return-type contract per the planner brief."
+    }
+  ],
+  "regressions": [],
+  "notes": "Sprint 2 cleanly delivers the parse-core happy path. parseMultipartRelated transitions from a Sprint 1 stub to a working implementation that yields StreamingMultipartPart instances from both Web Response and raw Readable inputs, with the queue+notifier bridge, the input normalizer, and the header flattener all landed as well-tested internal modules. FR-012 listener-before-pipe is correctly enforced (T-022 proves it via the dicer 'Unexpected end of multipart data' error reaching the queue rather than crashing the process). The FR-DR-A-028 normalization is preserved verbatim from Sprint 1. Build is green: pnpm check exits 0; lint clean under --max-warnings=0; typecheck clean; 13/13 test files / 101/101 tests pass; coverage at 100%/100% on the 2 gated files (parse-multipart-related.ts + queue-notifier.ts) — well above the ≥90% gate. The pack manifest is still exactly { dist/, README.md, LICENSE, package.json } (NFR-008 preserved); dist/index.d.ts + dist/index.d.cts both have zero `from 'dicer'` matches (T-071 preserved). Deferrals (Sprint 3 cleanup, Sprint 4 timeouts/abort, Sprint 5 fetchAndHandleMultipart, Sprint 6 caps, Sprint 7 hardening) are explicit and tracked in sprint-2-report.json knownIssues[] — no silent inclusion of out-of-scope work. Standards hash matches the generator's standardsHash exactly. Verdict: PASS."
+}

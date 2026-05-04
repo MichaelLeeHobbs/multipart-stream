@@ -1,0 +1,200 @@
+{
+  "sprintId": 1,
+  "verdict": "PASS",
+  "standardsDriftFromGenerator": false,
+  "regressionGate": {
+    "status": "clean",
+    "notes": "No prior sprints. Pre-existing tests (the placeholder smoke test) were intentionally replaced by 6 real test files. `pnpm test` passes (55/55 across 6 files). No prior tests broken."
+  },
+  "successCriteria": [
+    {
+      "id": 1,
+      "summary": "pnpm build + dist export surface (12 symbols, no dicer leak in d.ts)",
+      "status": "pass",
+      "evidence": [
+        "`pnpm build` exits 0; emits dist/index.js (8.48 KB), dist/index.cjs (9.05 KB), dist/index.d.ts (26.27 KB), dist/index.d.cts (26.27 KB), and source maps. No extra files.",
+        "ESM probe: `import('./dist/index.js')` exposes all 12 expected symbols as `function` (verified via runtime probe — exits 0 with 'OK').",
+        "CJS probe: `require('./dist/index.cjs')` exposes all 12 expected symbols as `function` (exits 0 with 'OK').",
+        "T-071: grep over `dist/index.d.ts` and `dist/index.d.cts` for `from 'dicer'`/`import .* dicer` returns zero matches in BOTH files.",
+        "Note: dist/index.cjs:244 normalization line shows `dicerMod__default.default.default ?? dicerMod__default.default` — that's tsup's `_interopDefault` wrapper kicking in, NOT a source-side bug; the source-side normalization (src/parse-multipart-related.ts:50-51) is the spec-mandated `(dicerMod as { default?: DicerDefaultExport }).default ?? dicerMod`. Sprint 8's T-052 cross-format consumer test will exercise this at runtime under both bundles."
+      ]
+    },
+    {
+      "id": 2,
+      "summary": "pnpm check (lint + typecheck + vitest) zero warnings",
+      "status": "pass",
+      "evidence": [
+        "`pnpm check` exits 0: lint clean under `--max-warnings=0`, typecheck clean, vitest 6 files / 55 tests pass in 718ms.",
+        "tests/unit/extract-boundary.test.ts: 13 tests including T-080 ReDoS perf gate (mean <50ms on 64KiB pathological input).",
+        "tests/unit/errors.test.ts: 22 tests covering all 7 classes with instanceof, name=verbatim-class-name (T-082), structured properties, and { cause } plumbing.",
+        "tests/unit/stream-helpers.test.ts: 9 tests covering streamToString/streamToBuffer happy + error + zero-byte (T-017/T-018).",
+        "tests/unit/types.test.ts: 5 expectTypeOf assertions covering exactOptionalPropertyTypes spread-merge (T-070) + Logger event-style signature (T-019).",
+        "tests/integration/sprint-1-stubs.test.ts: 4 stub-marker tests asserting parseMultipartRelated and fetchAndHandleMultipart are exported and surface their 'not yet implemented' sentinels.",
+        "tests/build-smoke.test.ts: 2 dist-shape tests (T-040 file existence + T-071 no-dicer-leak in d.ts)."
+      ]
+    },
+    {
+      "id": 3,
+      "summary": "pnpm pack manifest is exactly { dist/, README.md, LICENSE, package.json }; package.json fields correct; LICENSE present",
+      "status": "pass",
+      "evidence": [
+        "`pnpm pack --json` enumerates files: dist/index.cjs, dist/index.cjs.map, dist/index.d.cts, dist/index.d.ts, dist/index.js, dist/index.js.map, LICENSE, package.json, README.md — and nothing else (no source/tests/tsconfig/.prettierrc/.gitignore).",
+        "package.json:66 — `dependencies.dicer === '0.3.1'` exact (no caret/tilde).",
+        "package.json:68-83 devDependencies does NOT contain `@types/dicer` or `dicer`.",
+        "package.json:42 — `engines.node === '>=20.18.0'` (T-041, NFR-DR-A-014).",
+        "package.json:40 — `sideEffects: false`.",
+        "package.json:18 / package.json:21 — `repository.url` and `bugs.url` are non-empty git+https URLs (placeholder mhobbs/multipart-stream — see assumption #1).",
+        "package.json:27-34 — `exports['.']` includes the types/import/require triple.",
+        "LICENSE:1-22 — MIT text with `Copyright (c) 2026 Michael Hobbs <michael.lee.hobbs@gmail.com>`."
+      ]
+    },
+    {
+      "id": 4,
+      "summary": "README has 6 mandatory H2 sections, non-empty, with Install/Error-handling content per spec",
+      "status": "pass",
+      "evidence": [
+        "README.md:13 (Install), :26 (Quickstart), :57 (API), :86 (Error handling), :144 (Compatibility), :154 (License) — all 6 present with non-trivial content.",
+        "README.md:16 — Install section shows `pnpm add @ubercode/multipart-stream`.",
+        "README.md:113-142 — Error handling section explicitly documents the cross-format `err.name` fallback (NFR-DR-D-007) with a working `classifyByName` example and section heading 'Cross-format `err.name` fallback (NFR-DR-D-007)'."
+      ]
+    },
+    {
+      "id": 5,
+      "summary": "Hand-written ambient dicer shim; FR-DR-A-028 normalization in parse-multipart-related.ts; no @types/dicer; no `as any`/`as never`",
+      "status": "pass",
+      "evidence": [
+        "src/internal/dicer.d.ts:1-77 — hand-written ambient `declare module 'dicer'` typing only Dicer ctor, DicerOptions, DicerPartStream, DicerHeaderBag, and the part/finish/error/header/preamble events (FR-DR-A-027).",
+        "Grep for `@types/dicer` across package.json, pnpm-lock.yaml, tsconfig.json, tsconfig.base.json — zero matches.",
+        "src/parse-multipart-related.ts:50-51 — `const Dicer: DicerDefaultExport = (dicerMod as { default?: DicerDefaultExport }).default ?? dicerMod;` — exact FR-DR-A-028 shape; no `as any`, no `as never`.",
+        "Grep across src/ for `\\bany\\b|\\bas never\\b|\\bas any\\b` — only matches are inside JSDoc comments (e.g. 'in any input' in extract-boundary.ts:11) and the words inside the `as any` warnings in dicer.d.ts:74. No actual TypeScript `any` types or unsafe casts."
+      ]
+    },
+    {
+      "id": 6,
+      "summary": "JSDoc completeness gate (T-034); option-bag fields use `field?: T | undefined` form (T-070, NFR-DR-A-013)",
+      "status": "pass",
+      "evidence": [
+        "src/extract-boundary.ts:30-65 — full JSDoc with @param, @returns, @throws (3 cases), @example (3).",
+        "src/stream-helpers.ts:16-31 / :64-75 — JSDoc with @param/@returns/@throws/@example for both streamToString and streamToBuffer.",
+        "src/errors.ts — every class has a description, @example, and per-constructor @param. `name` is `override readonly name = 'X'` literal (NFR-DR-D-007 satisfied via class-field initializer rather than constructor assignment, equivalent semantics).",
+        "src/parse-multipart-related.ts:60-99 / src/fetch-and-handle-multipart.ts:21-54 — both stubs have @param/@returns/@throws/@example documenting the post-Sprint-1 behavior plus the current 'not yet implemented (Sprint N)' contract.",
+        "src/types.ts:191-256 (ParseMultipartOptions) and :264-303 (MultipartHandlerOptions): EVERY optional field uses the explicit `T | undefined` form — verified line-by-line: `boundary?: string | undefined`, `signal?: AbortSignal | undefined`, `onProgress?: ((snap: ProgressSnapshot) => void) | undefined`, `logger?: Logger | undefined`, `maxPartBytes?: number | undefined`, `maxParts?: number | undefined`, `maxHeadersPerPart?: number | undefined`, `maxHeaderBytesPerPart?: number | undefined`, `fetchInit?: Omit<RequestInit, 'signal'> | undefined`, `parser` is required (no `?`), `idleTimeoutMs`/`totalTimeoutMs` are required.",
+        "src/types.ts StreamingMultipartPart's optional convenience fields (contentId, contentLength) also use `T | undefined`."
+      ]
+    }
+  ],
+  "rubric": {
+    "functionalCorrectness": {
+      "score": 3,
+      "rationale": "Build green, all 55 tests pass, lint+typecheck+vitest zero warnings, 12-symbol export surface verified on both ESM and CJS bundles, dist/index.d.ts has zero dicer references (T-071). Pack manifest exactly the spec'd 4 entries. Stubs are explicitly thrown (parseMultipartRelated) / rejected (fetchAndHandleMultipart) with deterministic 'not yet implemented (Sprint N)' messages — no silent successes. Zero critical bugs; the only nits are documentation-level (see codeQuality)."
+    },
+    "codeQuality": {
+      "score": 3,
+      "rationale": "Zero `any`/`as never`/`as any` casts in src/; zero silent catches in src/; every error class extends Error and sets `name` to its literal class name. Logger uses event-style `{ level, msg, meta? }` shape per FR-018/JC-2; defaultLogger correctly re-shapes to positional console.warn(msg, meta). extractBoundary is genuinely a hand-written O(n) charCode-based tokenizer — verified line-by-line at src/extract-boundary.ts:66-201; no regex with backtracking risk. Imports are sorted (simple-import-sort), kebab-case file names, type imports use `import type`, .js extensions on imports. Standards/coding.md and standards/error-handling.md cleanly satisfied across src/. Minor nits: (a) tests/unit/extract-boundary.test.ts:113-117 has a `try/catch {}` with comment-only body inside the perf-gate test (technically a silent catch under standards/error-handling.md, but it's inside a timing-only test where catching swallowing is intentional, and ESLint's `no-empty: { allowEmptyCatch: false }` does not flag it because of the comment); (b) src/fetch-and-handle-multipart.ts:34 JSDoc says '@throws Sprint 1 stub: throws synchronously' but the body returns Promise.reject — wording mismatch only, no behavioral defect (test asserts `rejects.toThrow`)."
+    },
+    "specAdherence": {
+      "score": 3,
+      "rationale": "Public re-exports in src/index.ts:9-30 match spec/api.md §Module entry exactly — same 5 functions, 7 error classes, 7 type aliases, no extras, no submodule exports. Hand-written dicer shim follows FR-DR-A-027 (only the surface used; exposes both `export default` and `export =` for the FR-DR-A-028 normalization to typecheck under both ESM and CJS bundles). FR-DR-A-028 normalization shape at src/parse-multipart-related.ts:50-51 matches the planner's mandated form verbatim. Error classes' structured properties match spec/api.md §5 (idleTimeoutMs, totalTimeoutMs, reason, bytesReceived, {maxPartBytes,partIndex,bytesReceived}, {limit,partIndex,cap,observed}, {maxParts,observed}). Logger type is `(event: { level: 'warn'; msg: string; meta?: unknown }) => void` exactly per JC-2."
+    },
+    "completeness": {
+      "score": 3,
+      "rationale": "All 6 success criteria from sprints/plan.json id=1 verified pass. Every FR allocated to Sprint 1 (FR-015..FR-020, FR-DR-A-027, FR-DR-A-028, FR-DR-D-001, FR-DR-D-004) has implementing code AND a real test. Stubs are clearly marked: parseMultipartRelated and fetchAndHandleMultipart contain verbose comments referencing the future sprint (2 / 5) plus deterministic throw/reject sentinels and dedicated stub-marker tests in tests/integration/sprint-1-stubs.test.ts. Standards hash matches the expected 20cfb545a20814a0e711722c0606e1bc0d5631855f175e89bdbe06aa5be2c9cf — no drift between generator and evaluator inputs."
+    },
+    "designQuality": {
+      "applicable": false,
+      "score": null,
+      "rationale": "Not applicable — this is a Node library project with no UI surface."
+    }
+  },
+  "criticalBugs": [],
+  "minorIssues": [
+    {
+      "file": "src/fetch-and-handle-multipart.ts",
+      "line": 34,
+      "severity": "trivial",
+      "description": "JSDoc @throws line says 'throws synchronously with Error(...)' but the implementation returns Promise.reject (so the rejection is async, not a sync throw). The integration test correctly uses `rejects.toThrow`. Wording-only; no behavioral impact. Recommend Sprint 5 update the doc string when the body is filled in."
+    },
+    {
+      "file": "tests/unit/extract-boundary.test.ts",
+      "line": 113,
+      "severity": "minor",
+      "description": "T-080 perf gate's loop wraps `extractBoundary(pathological)` in `try { ... } catch { /* comment */ }` — technically a silent-catch-with-comment, allowed by ESLint's `no-empty: { allowEmptyCatch: false }` because the body is non-empty (has a comment), but standards/error-handling.md's intent is broader. The catch is semantically defensible (the assertion is timing, not value) but the planner could request that the helper be replaced with `expect.unreachable`/throw inside the try and assert the test wall time even if extractBoundary throws."
+    },
+    {
+      "file": "src/internal/dicer.d.ts",
+      "line": 75,
+      "severity": "trivial",
+      "description": "Inside `declare module 'dicer'`, both `export default Dicer;` AND `export = Dicer;` appear together. TypeScript permits this in declaration-merging contexts and `pnpm typecheck` passes — but it's an unusual shape that may surprise future maintainers. Worth a comment justifying both forms (one already exists at lines 69-74)."
+    }
+  ],
+  "assumptionsReview": [
+    {
+      "context": "GitHub URL placeholder",
+      "choice": "mhobbs/multipart-stream",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Spec did not pin the org/name; non-empty URL satisfies FR-DR-D-004. Operator can flip to 'ubercode/multipart-stream' (or whatever the real repo is) before publish without breaking any code path."
+    },
+    {
+      "context": "Copyright year",
+      "choice": "2026 Michael Hobbs <michael.lee.hobbs@gmail.com>",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Today's date is 2026-05-01; this is the correct year. Email matches the user's email. Spec mandates the line `Copyright (c) <year> Michael Hobbs` — satisfied."
+    },
+    {
+      "context": "T-080 ReDoS perf gate landed in Sprint 1 instead of waiting until Sprint 7",
+      "choice": "Wrote the perf assertion now",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Planner technicalNotes for Sprint 1 explicitly call out: 'write extractBoundary correctly the first time so the perf gate added in Sprint 7 is a no-op assertion'. Asserting the perf gate now provides early signal and matches planner intent. Sprint 7's gate can be a duplicate without rework."
+    },
+    {
+      "context": "tests/unit/types.test-d.ts (tsd-style) renamed to types.test.ts using vitest expectTypeOf",
+      "choice": "Use vitest's expectTypeOf inside a regular .test.ts",
+      "judgment": "ACCEPTABLE",
+      "rationale": "The tooling change is documented in the assumption with a clear cost/benefit. Static guarantees still surface during `pnpm typecheck`. No spec rule against this."
+    },
+    {
+      "context": "ESLint resolver upgrade for flat config",
+      "choice": "Added eslint-import-resolver-typescript@^3.6.0 with createTypeScriptImportResolver",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Necessary fix for the import/no-cycle rule under flat config. Not in spec scope; toolchain-only change with no public-API impact."
+    },
+    {
+      "context": "formatErrorEmbed truncate-only stub inlined into extract-boundary.ts",
+      "choice": "Private helper truncateForErrorEmbed in extract-boundary.ts; full helper deferred to Sprint 7",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Planner technicalNotes explicitly say 'Sprint 7 backfills control-char redact + ANSI redact + JSON.stringify per NFR-DR-S-006'. Sprint 1 ships a stable error-message shape; Sprint 7 will replace this with src/internal/format-error-embed.ts."
+    },
+    {
+      "context": "pnpm 10 does not support --dry-run",
+      "choice": "Used `pnpm pack --json` then deleted the tarball",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Equivalent file-list signal; the planner's `pnpm pack --dry-run` reference is satisfied. Sprint 8's T-048 will use the same shape."
+    },
+    {
+      "context": "Per-file ESLint overrides for src/extract-boundary.ts (max-lines-per-function, complexity, max-depth disabled)",
+      "choice": "Disabled rules on the tokenizer file only",
+      "judgment": "ACCEPTABLE",
+      "rationale": "The single-function state-machine shape is intentional for ReDoS-resistance verification; splitting into helpers obscures the loop invariants. Reasoning is documented inline at eslint.config.mjs:80-91."
+    },
+    {
+      "context": "tsup emits both .d.ts and .d.cts",
+      "choice": "Both files exist and both are dicer-import-free",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Required for FR-DR-A-029 attw gate in Sprint 8. T-071 confirmed clean for both."
+    },
+    {
+      "context": "Shorter keywords list",
+      "choice": "Used the generator prompt's list (multipart, multipart/related, streaming, fetch, async-iterator, node)",
+      "judgment": "ACCEPTABLE",
+      "rationale": "NFR-DR-D-013 is deferred per spec.md Out of Scope; operator can edit before publish."
+    },
+    {
+      "context": "attw gate deferred to Sprint 8",
+      "choice": "Did NOT run attw this sprint",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Planner explicitly assigns NFR-DR-D-015 to Sprint 8 ('publish-polish'). No Sprint 1 success criterion requires it."
+    }
+  ],
+  "regressions": [],
+  "notes": "Sprint 1 is a textbook scaffold: every piece of the public API surface is in place, the dicer ambient shim and FR-DR-A-028 normalization typecheck cleanly without @types/dicer, the dual-emit dist is dicer-import-free in d.ts/d.cts, the pack manifest is the exact 4 entries, and the lowest-risk surface (extractBoundary, the 7 error classes, streamToString/streamToBuffer) is real production code with real tests. The two stubs (parseMultipartRelated, fetchAndHandleMultipart) are unmistakably marked with their owning sprint and have stub-marker tests guarding against silent replacement. Standards hash matched verbatim — no drift between generator and evaluator inputs. Verdict: PASS."
+}

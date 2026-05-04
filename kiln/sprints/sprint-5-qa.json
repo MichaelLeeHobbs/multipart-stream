@@ -1,0 +1,238 @@
+{
+  "sprintId": 5,
+  "verdict": "PASS",
+  "standardsDriftFromGenerator": false,
+  "regressionGate": {
+    "status": "clean",
+    "notes": "pnpm test exits 0 with 26 test files / 227 tests passing — exactly matches the generator's claim and grew from Sprint 4's 21 files / 194 tests by exactly +5 files / +33 tests. ALL 21 Sprint 4 test files are still present with their per-file test counts unchanged (verified via the per-file list in pnpm test output): tests/unit/{extract-boundary(13), errors(22), stream-helpers(9), types(5), queue-notifier(11), normalize-input(9), format-error-embed(9), flatten-headers(10), validate-timeout(28), timers(16)}.test.ts — 10 unit files; tests/integration/{sprint-1-stubs(2 — DOWN from 3 in Sprint 4, retired the fetchAndHandleMultipart stub-marker), parse-multipart-related(13), parse-validation(3), parse-parser-harness(2), parse-progress(3), parse-cleanup(8), parse-late-emit(2), parse-truncation(4), parse-timeouts(12), parse-abort(10)}.test.ts — 10 integration files; tests/build-smoke.test.ts(2). The 5 NEW Sprint 5 test files are present and passing: fetch-and-handle.test.ts(12) + fetch-result-shape.test.ts(5) + fetch-content-type.test.ts(5) + fetch-abort.test.ts(5) + fetch-init-signal.test.ts(7) = 34 new tests minus 1 retired sprint-1-stubs test = +33 net (matches generator). New fixture tests/fixtures/start-multipart-server.ts present alongside Sprint 3's tests/fixtures/{multipart-builders,dicer-activity}.ts. tests/integration/sprint-1-stubs.test.ts was legitimately MODIFIED (only this Sprint 1-4 test file was modified per the brief's exception) — the 'fetchAndHandleMultipart: not yet implemented (Sprint 5)' stub-marker test was retired; the file now has 2 minimal smoke tests asserting both exports exist as functions; the parseMultipartRelated marker (already retired in Sprint 2) is preserved. Standards SHA-256 over (architecture, error-handling, api-conventions, coding, testing) computes to 20cfb545a20814a0e711722c0606e1bc0d5631855f175e89bdbe06aa5be2c9cf — exact match to generator's standardsHash. No prior test file deleted (other than the legitimate sprint-1-stubs marker retirement). No it.skip / it.todo / it.only in tests/."
+  },
+  "successCriteria": [
+    {
+      "id": 1,
+      "summary": "End-to-end orchestration (T-006/T-007/T-008) — parser keeps only meta part / parser undefined / parser throws — listener-leak harness clean on every path",
+      "status": "pass",
+      "evidence": [
+        "T-006 (3-part envelope, parser keeps only Content-ID:<meta>): tests/integration/fetch-and-handle.test.ts:70-109 — result.parts.length === 1 with the parsed value '{\"hello\":\"world\"}'; result.bytes > 0; status === 200; listener-leak harness clean (every dicer instance has 0 'part' / 0 'finish' listeners and >=1 'error' listener — FR-011 late-emit retention; every captured part stream is destroyed — drain-on-finally).",
+        "T-007 (parser always returns undefined): tests/integration/fetch-and-handle.test.ts:111-129 — result.parts.length === 0; result.bytes > 0; result.elapsedMs >= 0. The library-side drain at fetch-and-handle-multipart.ts:258-265 prevents dicer hang; without it, this test would reject with MultipartTruncatedError.",
+        "T-008 (parser throws on part 2): tests/integration/fetch-and-handle.test.ts:131-167 — outer reject matches /boom/; FR-010 cleanup ran (dicer listener counts 0 part / 0 finish / >=1 error; every captured part stream destroyed). Listener-leak harness CLEAN as required by the brief.",
+        "Implementation library-side drain: src/fetch-and-handle-multipart.ts:251-265 — after each `await invokeParser(...)`, if `!part.body.destroyed && part.body.readable`, drain via `for await (const _chunk of part.body) {}`. Honors api.md §2 'parser returning undefined skips the part; the part body is drained internally before the next yield'.",
+        "Runtime spot-check: in-process http server delivering a 2-part envelope yields parts: ['hello','world']; result Object.keys: bytes,elapsedMs,headers,parts,status; 'response' in result === false; result.headers instanceof Headers === true."
+      ]
+    },
+    {
+      "id": 2,
+      "summary": "Result shape (T-074 / T-005 expanded / FR-DR-A-029) — Object.keys, no response field, readonly types",
+      "status": "pass",
+      "evidence": [
+        "T-074 runtime shape: tests/integration/fetch-result-shape.test.ts:28-64 — `Object.keys(result).sort()` === `['bytes','elapsedMs','headers','parts','status']` (line 47-53); `'response' in result === false` (line 54); `result.headers instanceof Headers === true` (line 55); `result.status === 200` (line 56); `result.bytes > 0` (line 57); `result.elapsedMs >= 0` (line 58); result.parts.length === 2 (line 59).",
+        "T-005 expanded (status reflects underlying response): tests/integration/fetch-result-shape.test.ts:66-89 — explicit assertion that result.status matches server config 200.",
+        "Type-level keyof check (no response field at compile time): tests/integration/fetch-result-shape.test.ts:117-125 — `expectTypeOf<keyof MultipartFetchResult<unknown>>().toEqualTypeOf<'parts'|'bytes'|'elapsedMs'|'status'|'headers'>()`. Verified by `pnpm typecheck` exit 0.",
+        "Type-level shape (parts readonly, headers Headers, etc.): tests/integration/fetch-result-shape.test.ts:127-134 — `expectTypeOf<R['parts']>().toEqualTypeOf<readonly string[]>()`; `R['headers']` is `Headers`; status/bytes/elapsedMs are number.",
+        "Static type definition: src/types.ts:116-143 — `MultipartFetchResult<T>` has exactly 5 readonly fields {parts: readonly T[], bytes, elapsedMs, status, headers}; no `response` field. The type is also exported through src/index.ts.",
+        "Runtime spot-check (live spot-check via Step 3): hasResponse: false; headersIsHeaders: true; shape: bytes,elapsedMs,headers,parts,status."
+      ]
+    },
+    {
+      "id": 3,
+      "summary": "Content-Type validation (T-035 / T-036 / T-067 / FR-021) — fail-fast BEFORE dicer construction; case-insensitive; 4xx + non-multipart still rejects",
+      "status": "pass",
+      "evidence": [
+        "T-035 (application/json → reject; Dicer NEVER constructed): tests/integration/fetch-content-type.test.ts:38-57 — error message matches /multipart: response Content-Type is not multipart\\/related; got application\\/json/; CRUCIALLY `tracker.dicerInstances().length === 0` (line 53) — proving fail-fast BEFORE dicer construction. Uses Sprint 3's tests/fixtures/dicer-activity.ts emit-patch tracker.",
+        "T-036 (case-insensitive Multipart/Related → success): tests/integration/fetch-content-type.test.ts:59-78 — server returns `Multipart/Related; boundary=${BOUNDARY}` (capitalized); fetchAndHandleMultipart succeeds with parts === ['ok']. Validates the lowercase + startsWith FR-021 implementation at src/fetch-and-handle-multipart.ts:210-215.",
+        "T-067 (404 status + JSON body → reject per FR-021): tests/integration/fetch-content-type.test.ts:80-100 — server returns 404 with application/json; rejects with FR-021 message; tracker.dicerInstances().length === 0.",
+        "Bonus tests: missing-CT-header (lines 102-124) and text/plain (lines 126-144) both rejected with FR-021 message; dicer NEVER constructed.",
+        "Implementation order: src/fetch-and-handle-multipart.ts:210-215 — Content-Type check fires AFTER fetch returns but BEFORE the parseMultipartRelated call at line 246 (which is where Dicer is constructed via the FR-DR-A-028 normalization at parse-multipart-related.ts:76-77). The throw at line 212-214 short-circuits before parseMultipartRelated is invoked."
+      ]
+    },
+    {
+      "id": 4,
+      "summary": "fetchInit.signal forbidden (T-069 / FR-024) — sync throw; type-level Omit<RequestInit, 'signal'> enforcement",
+      "status": "pass",
+      "evidence": [
+        "T-069 fetchInit.signal alone: tests/integration/fetch-init-signal.test.ts:24-40 — laundered cast `as unknown as Omit<RequestInit,'signal'>` carries `{ signal: ctrl.signal }` past TypeScript; runtime guard rejects with /fetchInit\\.signal is reserved/.",
+        "T-069 both signals set: tests/integration/fetch-init-signal.test.ts:42-57 — options.signal AND fetchInit.signal both set; same /fetchInit\\.signal is reserved/ rejection (FR-024 unconditional — does not allow EITHER signal in fetchInit even if options.signal is also provided).",
+        "Error message wording: tests/integration/fetch-init-signal.test.ts:59-72 — message contains /pass signal via options\\.signal/ — guides callers to the correct location.",
+        "Defensive: signal: undefined slot does NOT trip guard: tests/integration/fetch-init-signal.test.ts:102-128 — `{ signal: undefined }` slot does not match the `signal !== undefined` runtime check. Useful for spread-merge consumers where the slot is present but value is undefined.",
+        "fetchInit without signal field is fine: tests/integration/fetch-init-signal.test.ts:74-100 — { method: 'GET', headers: {...} } satisfies Omit<RequestInit, 'signal'>; rejects for network reason but NOT with /fetchInit\\.signal is reserved/.",
+        "Type-level enforcement #1: tests/integration/fetch-init-signal.test.ts:131-138 — `expectTypeOf<'signal' extends keyof FetchInit ? true : false>().toEqualTypeOf<false>()` — verified by pnpm typecheck exit 0.",
+        "Type-level enforcement #2: tests/integration/fetch-init-signal.test.ts:140-145 — `FetchInit` matches `{ method?: string }` shape — proving other RequestInit fields ARE accepted.",
+        "Implementation: src/fetch-and-handle-multipart.ts:119-127 — runtime guard tests `'signal' in fetchInit && (fetchInit as { signal?: unknown }).signal !== undefined` — catches dynamic spreads and `as` consumers who launder past TypeScript.",
+        "Static side: src/types.ts:302 — `fetchInit?: Omit<RequestInit, 'signal'> | undefined` enforces FR-024 at compile time.",
+        "Runtime spot-check (Step 3): `threw: multipart: pass signal via options.signal — fetchInit.signal is reserved for internal use`."
+      ]
+    },
+    {
+      "id": 5,
+      "summary": "onProgress completion-tick (T-014 full) + Logger contract end-to-end (T-019/T-020/T-031..T-033)",
+      "status": "pass",
+      "evidence": [
+        "T-014 full (per-part + completion tick): tests/integration/fetch-and-handle.test.ts:171-205 — 3-part envelope; calls.length >= 4 (3 per-part from Layer A + 1 completion-tick from Layer B); bytes monotonic non-decreasing; final call's bytes === result.bytes; final elapsedMs >= 0; final rateBps is finite and >= 0.",
+        "T-014 defensive (rateBps finite when elapsed is 0): tests/integration/fetch-and-handle.test.ts:207-234 — synthetic-fast envelope; assertion `Number.isFinite(snap.rateBps) && snap.rateBps >= 0` for every snapshot. Verifies the `elapsedMs <= 0 ? 0 : Math.round((bytes*1000)/elapsedMs)` defensive guard at fetch-and-handle-multipart.ts:273-274.",
+        "T-019 caller logger event-style: tests/integration/fetch-and-handle.test.ts:238-295 — onProgress throws ONLY at completion (call #4); caller-supplied logger receives `{ level: 'warn', msg: '... onProgress threw on completion tick', meta: { errSummary: { name: 'Error', message: 'completion sink died' } } }`. Routed via src/fetch-and-handle-multipart.ts:281-285.",
+        "T-020 default console.warn fallback: tests/integration/fetch-and-handle.test.ts:297-343 — logger omitted; onProgress throws on completion call #4; console.warn called with POSITIONAL (msg, meta) shape; meta has errSummary property. Verifies defaultLogger fallback path src/fetch-and-handle-multipart.ts:140 (`options.logger ?? defaultLogger`).",
+        "T-031..T-033 (FR-017 silent-catch replacement at the per-part site): tests/integration/fetch-and-handle.test.ts:417-471 — onProgress throws on EVERY call; result.parts.length === 3 (parsing continues after each throw — proves FR-017 silent-catch replacement works); events.length >= 3; perPart events have errSummary.message === 'progress sink died'. Verifies the same logger reference is forwarded down to Layer A so Layer A's fireProgress catch-and-log routes through the caller's logger.",
+        "Implementation completion-tick: src/fetch-and-handle-multipart.ts:271-287 — `if (options.onProgress !== undefined) { try { options.onProgress(...) } catch (err) { logger({ level: 'warn', msg: 'multipart: onProgress threw on completion tick', meta: { errSummary: summarizeError(err) } }); } }`. The Layer-B completion-tick site is a NEW FR-017 silent-catch replacement site introduced by Sprint 5.",
+        "Implementation logger forwarding: src/fetch-and-handle-multipart.ts:140 + 232 — same `logger` reference is used at the Layer-B site AND forwarded to parseMultipartRelated via parseOpts.logger; Layer A's fireProgress catch-and-log uses the same reference, so a caller-supplied logger sees BOTH per-part and completion-tick events through one channel.",
+        "Coverage gate src/fetch-and-handle-multipart.ts: 100% line / 98.24% branch / 100% function (≥90% gate). Single uncovered branch is line 274 (the `elapsedMs <= 0 ? 0 :` short-circuit — defensively present but not deterministically reachable when wallclock has any forward motion). Verified via pnpm coverage."
+      ]
+    },
+    {
+      "id": 6,
+      "summary": "Build/check gates: pnpm build green; pnpm typecheck/lint/test all clean; coverage ≥ 90% on Sprint 5 wrapper",
+      "status": "pass",
+      "evidence": [
+        "pnpm typecheck exit 0; pnpm lint --max-warnings=0 exit 0; pnpm test exit 0 (227/227 passing); pnpm coverage exit 0.",
+        "pnpm build green: dist/index.{js,cjs,d.ts,d.cts} all produced; types files 31.57 KB each (byte-equivalent dual-emit per FR-019).",
+        "T-071 invariant: zero `from 'dicer'` matches in dist/index.d.ts AND dist/index.d.cts (only the runtime ESM `import dicerMod from 'dicer';` in dist/index.js, which is correct).",
+        "NFR-008 invariant: pnpm pack --json manifest is exactly { dist/index.{cjs,cjs.map,d.cts,d.ts,js,js.map}, README.md, LICENSE, package.json } — preserved verbatim from Sprint 4.",
+        "package.json invariants: dependencies.dicer === '0.3.1' exact; engines.node === '>=20.18.0'; sideEffects === false; exports['.'] resolves to dual-emit triple — all preserved.",
+        "Coverage: src/fetch-and-handle-multipart.ts 100% line / 98.24% branch / 100% function (≥90% gate — generator claimed 98.24% and matches). Prior gates preserved: src/internal/timers.ts 100%/96.15%/100%; src/internal/validate-timeout.ts 100%/100%/100%; src/parse-multipart-related.ts 95.78%/90.32%/100% (Sprint 4 was 95.78%/90.16%/100% — Sprint 5 actually IMPROVED branch coverage by 0.16% via the FR-014 drain path exercising line-388 truncation detector short-circuit).",
+        "12-symbol export probe (Step 3): `OK 12-symbol export` against dist/index.js."
+      ]
+    }
+  ],
+  "rubric": {
+    "functionalCorrectness": {
+      "score": 3,
+      "rationale": "Build green: pnpm build produces dist/index.{js,cjs,d.ts,d.cts}. Test count grew from Sprint 4's 21 files / 194 tests to Sprint 5's 26 files / 227 tests (+5 files, +33 tests — all real, no .skip/.todo/.only; pnpm test exit 0 with 227/227 passing). pnpm typecheck + pnpm lint --max-warnings=0 + pnpm test all exit 0. Runtime spot-checks all pass: 12-symbol export probe; live 2-part envelope through in-process http server yields parts: ['hello','world'], shape: bytes,elapsedMs,headers,parts,status, hasResponse: false, headersIsHeaders: true; FR-024 sync throw produces 'multipart: pass signal via options.signal — fetchInit.signal is reserved for internal use'; T-013 already-aborted produces MultipartAbortError with verbatim reason 'user' (NOT a DNS error against invalid-domain.invalid — proving fetch was never called). T-071 invariant: zero `from 'dicer'` matches in dist/index.d.ts AND dist/index.d.cts. NFR-008 invariant: pnpm pack --json manifest exactly { dist/, README.md, LICENSE, package.json }. package.json#dependencies.dicer === '0.3.1' exact; engines.node === '>=20.18.0'; sideEffects === false; exports['.'] resolves to dual-emit triple. No regressions; all 6 success criteria pass; no critical bugs. fetch-and-handle-multipart.ts is now REAL (not stub) — sprint-1-stubs.test.ts no longer contains the 'not yet implemented (Sprint 5)' rejection assertion."
+    },
+    "codeQuality": {
+      "score": 3,
+      "rationale": "Standards compliance verified: zero `as any` / `as never` casts in src/ (only matches are JSDoc/comments documenting the absence: fetch-and-handle-multipart.ts:117 in a comment, parse-multipart-related.ts:66 in a comment, dicer.d.ts:74 in a comment, normalize-input.ts:18/113 in comments). Zero silent catches in src/ (Grep for `catch\\s*\\([^)]*\\)\\s*\\{\\s*\\}` returns no matches). FR-DR-A-028 normalization preserved BYTE-IDENTICAL at src/parse-multipart-related.ts:76-77 (verified via Grep — `const Dicer: DicerDefaultExport = (dicerMod as { default?: DicerDefaultExport }).default ?? dicerMod;`). Sprint 5 did NOT modify parse-multipart-related.ts (the report claimed it would only forward through and not modify; verified — the file's existing Sprint 4 shape is preserved). FR-DR-A-026 forwarding-not-owning honored: `setupTimers` is NOT imported in src/fetch-and-handle-multipart.ts (Grep returns zero matches); `setTimeout` is NOT used at runtime (only mentioned in JSDoc text describing the validatePositiveTimeout error message). The wrapper forwards `idleTimeoutMs/totalTimeoutMs/signal/onProgress/logger/maxPartBytes/maxParts/maxHeadersPerPart/maxHeaderBytesPerPart` DOWN to parseMultipartRelated via the parseOpts spread at fetch-and-handle-multipart.ts:227-243. All FR-017 silent-catch sites at fetch-and-handle-multipart.ts:281-285 (completion-tick onProgress catch) route through `logger.warn` event-style with `meta: { errSummary }`. Logger event-style at every site (no console.log; `defaultLogger` fallback used when caller omits). Status + headers captured BEFORE the for-await loop at fetch-and-handle-multipart.ts:221-222 — verified by Read. The eslint.config.mjs override at lines 92-124 is justified (consolidated comment block extends Sprint 4's rationale to fetchAndHandleMultipart's sequential phases — same shape as the existing setupTimers and parse-multipart-related.ts overrides). The library-side drain implementation at fetch-and-handle-multipart.ts:251-265 honors api.md §2 contract for parser-undefined-skip-and-drain."
+    },
+    "specAdherence": {
+      "score": 3,
+      "rationale": "FR-005 (fetchAndHandleMultipart end-to-end) implemented per text — wrapper validates options synchronously, calls fetch, validates Content-Type, captures status+headers, drives parseMultipartRelated, awaits parser per part, resolves with FR-DR-A-029 result shape. Verified by 6 success-criteria tests + runtime spot-check. FR-006 timeouts enforcement at fetch-and-handle-multipart.ts:112-113 (top of function, BEFORE fetch is called) — both timeouts validated via validatePositiveTimeout with NFR-DR-S-009 setTimeout-clamping message text. FR-009 already-aborted at fetch-and-handle-multipart.ts:131-133 — caller-verbatim reason via `new MultipartAbortError(options.signal.reason)` (F-S-006 contract). T-013 contract holds: `vi.spyOn(globalThis, 'fetch')` shows zero calls when caller signal is pre-aborted. FR-021 Content-Type validation at fetch-and-handle-multipart.ts:210-215 (case-insensitive `contentType.toLowerCase().startsWith('multipart/related')`) — fires BEFORE parseMultipartRelated is called (verified by T-035's dicer-activity tracker assertion `tracker.dicerInstances().length === 0`). FR-024 fetchInit.signal ban at fetch-and-handle-multipart.ts:119-127 — runtime check tests `'signal' in fetchInit && fetchInit.signal !== undefined` (so undefined slot doesn't trip); type-level `Omit<RequestInit,'signal'>` at types.ts:302. FR-DR-A-026 (timer ownership in Layer A) honored — no setupTimers import, no setTimeout in fetch-and-handle-multipart.ts (Grep verified); the wrapper only owns the wallclock (startMs/elapsedMs computation for the result). FR-DR-A-029 result shape (`{ parts, bytes, elapsedMs, status, headers }`, NO response field) implemented at fetch-and-handle-multipart.ts:290 + types.ts:116-143; verified at runtime AND type-level via expectTypeOf. T-014 full (per-part + completion tick) implemented — Layer A fires per-part; Layer B fires once at completion (fetch-and-handle-multipart.ts:271-287). FR-014 library-side drain implemented at fetch-and-handle-multipart.ts:251-265 — honors the api.md §2 'parser-undefined-skip-and-drain' contract. Deferrals NOT silently included: Sprint 6 caps enforcement (caps are FORWARDED but trip-time logic deferred — only forwarding test at fetch-and-handle.test.ts:392-414 confirms this; Sprint 6 will add resource-caps.test.ts with trip-time behavior); Sprint 7 full formatErrorEmbed (fetch-and-handle-multipart.ts:213 calls `truncateForErrorEmbed` from Sprint 3 — the truncate-only stub; Sprint 7 backfills the full sanitizer per knownIssues[]); Sprint 7 dedicated T-079 upper-bound test (Sprint 4 already enforces the bound; the formal T-079 row lives in Sprint 7); Sprint 8 cross-format/attw/memory tests deferred. All deferrals tracked in sprint-5-report.json knownIssues[]. F-S-006 reason contract honored via `new MultipartAbortError(options.signal.reason)` at fetch-and-handle-multipart.ts:132 (already-aborted path) and at fetch-and-handle-multipart.ts:200 (mid-fetch abort path) — caller's reason verbatim, no library-side synthesis."
+    },
+    "completeness": {
+      "score": 3,
+      "rationale": "All 6 success criteria from sprints/plan.json id=5 pass (see successCriteria[] above). Coverage gates ALL met: src/fetch-and-handle-multipart.ts at 100% line / 98.24% branch / 100% function (≥90% gate; generator claimed 98.24% and matches exactly — single uncovered branch at line 274 is the elapsedMs<=0 short-circuit, defensive). No regression on prior gates: src/internal/timers.ts 100%/96.15%/100%; src/internal/validate-timeout.ts 100%/100%/100%; src/parse-multipart-related.ts 95.78%/90.32%/100% (actually IMPROVED from Sprint 4's 90.16% branch by 0.16% via the new FR-014 drain path exercising the truncation-detector short-circuit). Every FR allocated to Sprint 5 (FR-005, FR-021, FR-024, FR-DR-A-029) has implementing code AND a real test. 33 new tests across 5 new test files: 12 fetch-and-handle + 5 fetch-result-shape + 5 fetch-content-type + 5 fetch-abort + 7 fetch-init-signal -- 1 retired = 33 net (matches generator's claim). New fixture tests/fixtures/start-multipart-server.ts present and well-shaped (dynamic port, configurable status/contentType/body/stallMs/holdMs/onRequest, async-safe close with closeAllConnections). Brief estimated '~30-40 new Sprint 5 tests'; generator delivered 33 — within range. All real (no .skip/.todo/.only). Deferrals (Sprint 6 caps trip-time, Sprint 7 formatErrorEmbed full + T-079 dedicated, Sprint 8 cross-format/attw/memory) explicit and tracked. Standards hash matches generator's standardsHash exactly. T-071 invariant + NFR-008 pack manifest invariant + dicer pin + engines.node all preserved."
+    },
+    "designQuality": {
+      "applicable": false,
+      "score": null,
+      "rationale": "Not applicable — this is a Node library project with no UI surface."
+    }
+  },
+  "criticalBugs": [],
+  "minorIssues": [
+    {
+      "file": "tests/integration/fetch-init-signal.test.ts",
+      "line": 102,
+      "severity": "trivial",
+      "description": "The test name is literally a misnomer: 'fetchInit with explicit signal: undefined still throws (defensive)' — but the test body actually asserts the OPPOSITE (that the FR-024 message does NOT appear; lines 124-127). This is intentional per the generator's assumption #7: the runtime check tests `signal !== undefined`, so a `signal: undefined` slot does NOT trip the guard. The test correctly verifies that behavior, but the test name reads opposite of its assertion. Generator self-disclosed this in implementations[] comment ('the test name is a misnomer'). Cosmetic — does not affect correctness; future test name cleanup can address."
+    },
+    {
+      "file": "src/fetch-and-handle-multipart.ts",
+      "line": 274,
+      "severity": "trivial",
+      "description": "Single uncovered branch in coverage report: `elapsedMs <= 0 ? 0 : Math.round((lastBytes * 1000) / elapsedMs)` — the `<= 0` short-circuit is defensive but not deterministically reachable when wallclock has any forward motion. T-014 defensive test at fetch-and-handle.test.ts:207-234 attempts to drive a synthetic-fast envelope but the assertion is on the rateBps shape (finite + >= 0), not on hitting the branch specifically. Coverage holds at 98.24% branch, well above the 90% gate. Same-shape defensive branch as Sprint 4's timers.ts:139 short-circuit. Could be exercised by mocking Date.now in a future sprint, or accepted as defensive code. Not a bug."
+    },
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 213,
+      "severity": "trivial",
+      "description": "rawHeaders on StreamingMultipartPart is still set to Buffer.alloc(0) (Sprint 2/3/4 carry-over, preserved through Sprint 5). Sprint 5 did not modify parse-multipart-related.ts — the file's existing shape is preserved. Not Sprint 5's responsibility."
+    },
+    {
+      "file": "src/internal/default-logger.ts",
+      "line": 38,
+      "severity": "trivial",
+      "description": "Coverage on this file at 50% (Sprint 1 carry-over). Sprint 5's T-020 test (fetch-and-handle.test.ts:297-343) exercises the console.warn fallback path via the Layer-B completion-tick site, lifting coverage from Sprint 4's 20% to 50%. The remaining uncovered branches are the `event.meta === undefined` short-circuit and the `resolveLogger` helper (which Sprint 5 doesn't use — it inlines `options.logger ?? defaultLogger` directly). Documented in sprint-5-report.json knownIssues[]. Not Sprint 5's responsibility to fully lift."
+    },
+    {
+      "file": "src/internal/flatten-headers.ts",
+      "line": 47,
+      "severity": "trivial",
+      "description": "Coverage at 86.2% statements / 83.33% branches (Sprint 2 carry-over). Not Sprint 5's responsibility to lift."
+    },
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 388,
+      "severity": "trivial",
+      "description": "The setImmediate-deferred truncation detector still exhibits the carry-over uncovered lines 324-330 and 388 (Sprint 3+4 carry-over). Sprint 5 actually IMPROVED branch coverage on this file from 90.16% to 90.32% via the new fetch-driven tests exercising the per-part-stream error catch branch through the FR-014 drain path. Not Sprint 5's responsibility to lift further."
+    }
+  ],
+  "assumptionsReview": [
+    {
+      "context": "Library-side body drain when parser returns undefined (FR-014; api.md §2)",
+      "choice": "After every parser call, library checks `if (!part.body.destroyed && part.body.readable)` and drains via `for await (const _chunk of part.body) {}`. No-op when parser already drained. Without this, dicer's per-part Readable buffers indefinitely; the closing boundary doesn't make it through; truncation detector mis-fires. Discovered during first test run (T-006/T-007 failed with MultipartTruncatedError before the drain was added).",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at src/fetch-and-handle-multipart.ts:251-265 by Read. Honors api.md §2 explicit contract: 'parser returning undefined skips the part; the part body is drained internally before the next yield'. Layer A's parseMultipartRelated cannot perform this drain because it is consumer-agnostic (it cannot know whether the consumer's parser drained or not — Layer A drains in cleanup() for the iterator-`break` path, but not between yields). The for-await drain idiom is canonical for a Node Readable; uses the same `for await` machinery the consumer would use, no race with dicer's next 'part' emission. T-007 (parser always returns undefined → parts.length === 0) verifies this empirically — without the drain, this test would reject with MultipartTruncatedError. The eslint-disable for the `_chunk` unused variable is necessary and correctly scoped."
+    },
+    {
+      "context": "wrappedOnProgress shape — should bytes always be tracked even when caller doesn't supply onProgress?",
+      "choice": "Layer B always supplies an INTERNAL `onProgressForLayerA` to parseMultipartRelated regardless of caller. The internal callback unconditionally captures `lastBytes = snap.bytes`; when the caller supplied options.onProgress, the callback also forwards the snapshot. Layer A's fireProgress wraps THIS wrapper in try/catch + logger.warn — so caller's throw goes through Layer A's catch site (canonical). No double-log because Layer B doesn't catch in onProgressForLayerA.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at src/fetch-and-handle-multipart.ts:166-171 — the inner closure captures lastBytes regardless of options.onProgress presence. This is correct: result.bytes always reflects the actual source bytes count (T-074 asserts result.bytes > 0 for happy-path; T-007 asserts result.bytes > 0 even when parser returns undefined). The architecture decision (no Layer B catch around forwarding) avoids double-log when caller's onProgress throws — Layer A's fireProgress catches and routes through the same logger. Verified by T-031..T-033 (events.length >= 3 — exactly per-part count, NOT 2x per-part). The completion-tick site at line 271-287 has its own catch (single-log) because Layer A doesn't fire that site."
+    },
+    {
+      "context": "tests/integration/sprint-1-stubs.test.ts retired vs deleted",
+      "choice": "Preserved with the fetchAndHandleMultipart marker retired and the file's purpose-comment updated. The remaining 2 tests assert both public exports exist as functions — cheap regression guard against accidental drop of a re-export from src/index.ts.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by Read of tests/integration/sprint-1-stubs.test.ts — file has 2 tests, BOTH are real (parseMultipartRelated returns AsyncGenerator + fetchAndHandleMultipart returns a Promise). The file has no empty body, no .skip/.todo/.only. The brief explicitly allows this file to be either modified-with-real-tests OR deleted; the generator's choice to preserve it as a smoke regression guard is consistent with the export-existence pattern. The test-count delta from Sprint 4 (3→2) reflects this retirement correctly."
+    },
+    {
+      "context": "fetch caller-signal forwarding — `fetch(url, { ...options.fetchInit, signal: options.signal })` overwrites any potential nested fetchInit.signal with options.signal",
+      "choice": "Init is built as `{ ...(options.fetchInit ?? {}), ...(options.signal !== undefined ? { signal: options.signal } : {}) }` so when both fetchInit.signal AND options.signal are present, options.signal overwrites (defensive). The runtime FR-024 check at top of function should have already rejected if fetchInit.signal was set, so this overwrite is defensive belt-and-suspenders.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at src/fetch-and-handle-multipart.ts:187-191 by Read. The conditional spread shape `...(options.signal !== undefined ? { signal: options.signal } : {})` is the same exactOptionalPropertyTypes-honoring pattern Sprint 4 uses elsewhere. The overwrite ordering (options.signal AFTER fetchInit spread) is correct: even if the FR-024 runtime check at line 119-127 was somehow bypassed (it cannot be — there's no path between that check and this spread), options.signal would still take precedence. The runtime check at line 119-127 makes the overwrite unreachable in practice, but the defense-in-depth shape is correct."
+    },
+    {
+      "context": "ESLint per-file overrides — added src/fetch-and-handle-multipart.ts to existing override list",
+      "choice": "Added to the existing override block at eslint.config.mjs:92-124 alongside parse-multipart-related.ts, queue-notifier.ts, timers.ts. Comment block extends Sprint 4's documented rationale.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by Read of eslint.config.mjs:92-124. The wrapper's sequential phases (validate → fetch → CT-check → capture → drive → finalize) form a single linear narrative; splitting would obscure the forwarding shape. The complexity rule fires because of `if (x !== undefined)` guards required by exactOptionalPropertyTypes (parseOpts spread at lines 227-243 has 6+ such guards). A helper-extraction refactor would relocate the count, not reduce it. Same shape as the existing setupTimers and parse-multipart-related.ts overrides; the comment block at lines 114-120 documents the rationale. Justified, NOT scope creep — the override is a deliberate signal that the code review path approved this single-function shape."
+    },
+    {
+      "context": "FR-021 fail-fast verification — using existing tests/fixtures/dicer-activity.ts tracker",
+      "choice": "Use Sprint 3's emit-patch tracker. The FR-021 throw fires BEFORE parseMultipartRelated is called (where Dicer is instantiated), so on this path tracker.dicerInstances() stays empty.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at fetch-content-type.test.ts:38-57 (T-035), 80-100 (T-067), 102-124 (missing CT), 126-144 (text/plain) — all assert `tracker.dicerInstances().length === 0`. The tracker is the canonical way to verify FR-021 fail-fast invariant; same tracker is reused at parse-multipart-related.test.ts and parse-cleanup.test.ts. No DI hook added (out of scope); the emit-patch is non-invasive. Correctly proves that Dicer is NEVER constructed on the FR-021 reject path."
+    },
+    {
+      "context": "Mid-fetch abort handling — re-read options.signal?.aborted after fetch reject",
+      "choice": "Wrap fetch in try/catch; in catch, re-read options.signal?.aborted (NOT the original capture). If signal is now aborted, throw `new MultipartAbortError(sig.reason)`; otherwise re-throw original error.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at src/fetch-and-handle-multipart.ts:192-203. The re-read is necessary because the FR-009 already-aborted check at line 131-133 only catches the synchronously-aborted case; the caller can fire abort asynchronously between then and the fetch await. Inspecting `sig?.aborted` (post-fetch-reject) is cleaner than inspecting the caught error's name/code (which would be fragile across engine versions). The `setTimeout(() => ctrl.abort('mid-fetch'), 50)` test at fetch-abort.test.ts:99-118 verifies this works end-to-end — captures MultipartAbortError with verbatim 'mid-fetch' reason."
+    },
+    {
+      "context": "FR-024 runtime guard wording — should `signal: undefined` slot trip the guard?",
+      "choice": "No. Implementation tests `'signal' in fetchInit && (fetchInit as { signal?: unknown }).signal !== undefined`. A laundered cast that delivers an explicit `signal: undefined` slot does NOT trip the guard.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at src/fetch-and-handle-multipart.ts:119-127 + fetch-init-signal.test.ts:102-128. The spec contract (FR-024) is about the SIGNAL itself, not the slot — a `signal: undefined` slot from spread-merge is harmless. Correctly conditioned. Note: the test name 'fetchInit with explicit signal: undefined still throws (defensive)' is a misnomer — the test body actually asserts the OPPOSITE (that the FR-024 message does NOT appear); the generator self-disclosed this in their assumption note. Cosmetic only."
+    },
+    {
+      "context": "T-013 spy contract — verifying fetch was NEVER called when caller signal pre-aborted",
+      "choice": "Use vi.spyOn(globalThis, 'fetch') captured during the test. The FR-009 already-aborted throw fires BEFORE any fetch call. Spy is mockRestore'd in finally so subsequent tests see the real fetch.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at fetch-abort.test.ts:32-65. The spy.not.toHaveBeenCalled() assertion at line 61 is the canonical way to assert 'fetch was never invoked'. Runtime spot-check (Step 3) confirms: against `http://invalid-domain.invalid/` with pre-aborted signal, the result is `MultipartAbortError - reason: user`, NOT a DNS error — which is conclusive proof that fetch was never called (no DNS resolution attempted)."
+    },
+    {
+      "context": "ESLint complexity warning on fetchAndHandleMultipart (29 vs 10 max) — extract helpers or override?",
+      "choice": "Override. Function complexity comes from many `if (x !== undefined)` guards required by exactOptionalPropertyTypes when constructing parseOpts spread, plus FR-009/FR-024/parser-presence guard branches. Helper-extraction would relocate the count, not reduce it.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at eslint.config.mjs:92-124 + Read of fetch-and-handle-multipart.ts. The 6+ conditional spreads at lines 227-243 (one per cap field + signal + logger) are textbook exactOptionalPropertyTypes guards. Splitting into a `buildParseOpts(options)` helper would relocate the count without reducing it; the wrapper's sequential phases form a single narrative that splitting would obscure. Same justification pattern as Sprint 4's setupTimers override. Not scope creep — deliberate signal that the code review path approved this single-function shape."
+    },
+    {
+      "context": "Test count: brief estimate '~30-40 new Sprint 5 tests'; delivered 33",
+      "choice": "33 new tests across 5 new test files: 12 fetch-and-handle + 5 fetch-result-shape + 5 fetch-content-type + 5 fetch-abort + 7 fetch-init-signal -- 1 retired (sprint-1-stubs marker) = 33 net.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by pnpm test per-file output. All 33 are real (no .skip/.todo/.only); coverage gates met; no flake observed across multiple pnpm test runs. Each new code path has at least one happy-path + one error-path test. Within the brief's range; not over- or under-shooting."
+    },
+    {
+      "context": "No new devDependencies added in Sprint 5",
+      "choice": "package.json devDependencies unchanged from Sprint 4",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by Read of package.json. dependencies.dicer === '0.3.1' exact; no devDeps added; pnpm pack manifest still { dist/, README.md, LICENSE, package.json }. Toolchain unchanged from Sprint 4. The new fixture (start-multipart-server.ts) uses Node's built-in 'node:http' (no external dep). No scope creep into toolchain."
+    },
+    {
+      "context": "Self-import + tree-shaking concern — generator initially added a self-import then removed it",
+      "choice": "Removed. The tsup build doesn't tree-shake named exports referenced from src/index.ts; the file's exported fetchAndHandleMultipart is preserved by src/index.ts's re-export, which is the canonical preservation mechanism.",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Generator self-disclosed and resolved during implementation. No residual self-import in the file (verified by Read — no `import ... from './fetch-and-handle-multipart.js'` self-reference). The typecheck flag would have caught this regardless; the issue is fully resolved."
+    }
+  ],
+  "regressions": [],
+  "notes": "Sprint 5 cleanly delivers fetch orchestration. fetchAndHandleMultipart at src/fetch-and-handle-multipart.ts is now REAL (not stub) — replaces the Sprint 1 ~10-line stub with ~110 lines of Layer B implementation plus comprehensive JSDoc + sequenced comments. Validation order at top of function: (1) parser presence (TypeError), (2) validatePositiveTimeout on both timeouts, (3) FR-024 fetchInit.signal runtime ban, (4) FR-009 already-aborted MultipartAbortError with caller-verbatim reason. fetch is invoked with `{ ...fetchInit, signal: options.signal }` (caller signal forwarded raw; FR-DR-A-026 — Layer A owns timers, no TimerState constructed in Layer B; verified by Grep that setupTimers is NOT imported and setTimeout is NOT called in this file). FR-021 Content-Type validation (case-insensitive `toLowerCase().startsWith('multipart/related')`) fires BEFORE parseMultipartRelated is called — verified by T-035's tests/fixtures/dicer-activity.ts tracker assertion. status + headers captured BEFORE the for-await loop (FR-DR-A-029 — needed because Response.body is consumed during iteration). The for-await loop forwards EVERYTHING (idleTimeoutMs, totalTimeoutMs, signal, onProgress, logger, all 4 caps) DOWN to parseMultipartRelated via parseOpts spread. Library-side body drain at lines 251-265 implements api.md §2 contract (parser-undefined-skip-and-drain) — without this drain, dicer's state machine hangs and truncation detector mis-fires. Completion-tick onProgress fires AFTER for-await (Layer-B-owned; T-014 full assertion: 3 per-part + 1 completion = 4 calls minimum). FR-017 silent-catch replacement at the completion-tick site routes throws through `logger.warn` event-style with `meta: { errSummary }`. Result shape `{ parts, bytes, elapsedMs, status, headers }` per FR-DR-A-029 — verified at runtime AND type-level (no `response` field; `expectTypeOf<keyof MultipartFetchResult<unknown>>().toEqualTypeOf<...>()`). 5 new test files (fetch-and-handle / fetch-result-shape / fetch-content-type / fetch-abort / fetch-init-signal) + 1 new fixture (start-multipart-server.ts — dynamic port; configurable status/contentType/body/stallMs/holdMs/onRequest; closeAllConnections on close). 33 net new tests; 227/227 passing; pnpm typecheck + pnpm lint --max-warnings=0 + pnpm coverage all exit 0. Branch coverage on src/fetch-and-handle-multipart.ts: 100% line / 98.24% branch / 100% function (≥90% gate; matches generator's claim exactly). No regression on prior coverage gates: timers.ts 100%/96.15%/100%; validate-timeout.ts 100%/100%/100%; parse-multipart-related.ts 95.78%/90.32%/100% (actually IMPROVED branch coverage by 0.16% from Sprint 4's 90.16% via the FR-014 drain path exercising the truncation-detector short-circuit). T-071 invariant + NFR-008 pack manifest invariant + dicer 0.3.1 pin + engines.node >=20.18.0 all preserved. Sprint 5 did NOT modify src/parse-multipart-related.ts (verified — FR-DR-A-028 normalization at lines 76-77 byte-identical). Standards hash matches generator's standardsHash exactly. Runtime spot-checks all pass: 12-symbol export probe; live 2-part envelope produces parts: ['hello','world'], shape: bytes,elapsedMs,headers,parts,status, hasResponse: false, headersIsHeaders: true; FR-024 sync throw produces 'multipart: pass signal via options.signal — fetchInit.signal is reserved for internal use'; T-013 already-aborted produces MultipartAbortError - reason: user (NOT a DNS error against invalid-domain.invalid — proving fetch was never called). Deferrals (Sprint 6 caps trip-time enforcement, Sprint 7 formatErrorEmbed full + dedicated T-079, Sprint 8 cross-format/attw/memory) explicit and tracked in sprint-5-report.json knownIssues[] — no silent inclusion. No `as any`, no `as never`, no silent catches. Verdict: PASS."
+}

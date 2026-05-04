@@ -1,0 +1,87 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write",
+      "Agent",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git branch:*)",
+      "Bash(git fetch:*)",
+      "Bash(git show:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm test:watch:*)",
+      "Bash(pnpm coverage:*)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm lint\\:fix:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm clean:*)",
+      "Bash(pnpm format:*)",
+      "Bash(pnpm format\\:fix:*)",
+      "Bash(pnpm check:*)",
+      "Bash(pnpm dev:*)",
+      "Bash(pnpm pack:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(pnpm run:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(mkdir:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(echo:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(sha256sum:*)",
+      "Bash(curl:*)",
+      "Bash(unzip -l:*)",
+      "Bash(unzip -p:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git reset:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(npm publish:*)",
+      "Bash(pnpm publish:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(npm publish --force:*)"
+    ]
+  },
+  "hooks": {
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p .claude/logs && cat - >> .claude/logs/stop-failures.log"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p .claude/logs && { echo \"=== PreCompact $(date '+%F %T') ===\"; cat -; echo; } >> .claude/logs/pre-compact.log"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,221 @@
+{
+  "sprintId": 4,
+  "verdict": "PASS",
+  "standardsDriftFromGenerator": false,
+  "regressionGate": {
+    "status": "clean",
+    "notes": "pnpm test exits 0 with 21 test files / 194 tests passing — exactly matches the generator's claim and grew from Sprint 3's 17 files / 128 tests by exactly +4 files / +66 tests. ALL 17 Sprint 3 test files are still present and passing: tests/unit/{extract-boundary(13), errors(22), stream-helpers(9), types(5), queue-notifier(11), normalize-input(9), format-error-embed(9), flatten-headers(10)}.test.ts; tests/integration/{sprint-1-stubs(3), parse-multipart-related(13), parse-validation(3), parse-parser-harness(2), parse-progress(3), parse-cleanup(8), parse-late-emit(2), parse-truncation(4)}.test.ts; tests/build-smoke.test.ts(2). The 4 NEW Sprint 4 test files are present and passing: tests/unit/validate-timeout.test.ts(28), tests/unit/timers.test.ts(16), tests/integration/parse-timeouts.test.ts(12), tests/integration/parse-abort.test.ts(10). Standards SHA-256 over (architecture, error-handling, api-conventions, coding, testing) computes to 20cfb545a20814a0e711722c0606e1bc0d5631855f175e89bdbe06aa5be2c9cf — exact match to generator's standardsHash. No prior test file deleted or modified beyond the additive Sprint 4 work. No it.skip / it.todo / it.only in tests/. queue-notifier.ts was NOT modified in Sprint 4 (verified via Read — same Sprint 3 shape preserved)."
+  },
+  "successCriteria": [
+    {
+      "id": 1,
+      "summary": "Required-timeout enforcement (T-026 + T-026b) — both timeouts mandatory at runtime; error message mentions setTimeout clamping (NFR-DR-S-009)",
+      "status": "pass",
+      "evidence": [
+        "Static enforcement: ParseMultipartOptions has idleTimeoutMs and totalTimeoutMs as REQUIRED fields (verified by `pnpm typecheck` exit 0; the generator must launder casts in the runtime tests, lines 88-92 of parse-timeouts.test.ts).",
+        "Runtime enforcement: src/parse-multipart-related.ts:161-162 calls validatePositiveTimeout for both fields BEFORE any other work (after only the JSDoc and a small amount of comment text). This is the FIRST executable code in the generator body.",
+        "T-026b Response overload missing idleTimeoutMs: tests/integration/parse-timeouts.test.ts:94-116 — first .next() rejects with TypeError matching /idleTimeoutMs/.",
+        "T-026b Response overload missing totalTimeoutMs: tests/integration/parse-timeouts.test.ts:118-128.",
+        "T-026b Readable overload missing both: tests/integration/parse-timeouts.test.ts:130-147 — also asserts message contains /setTimeout/ (NFR-DR-S-009).",
+        "T-026b Readable overload cross-product: lines 149-158 (missing idle only) and 160-169 (missing total only) — cover the cross-product the brief requires.",
+        "T-060..T-065 surface from generator: lines 171-188 — feeds 0 / NaN / Infinity / -1 / 1.5 through the generator and asserts each rejects with /idleTimeoutMs/.",
+        "Runtime spot-check: `node -e \"... parseMultipartRelated(res, {})\"` against dist/index.js prints 'threw: TypeError - multipart: idleTimeoutMs must be a positive finite integer in [1, 2_147_483_647]; got undefined. Note: Node's setTimeout clamps values above 2^31-1 to 1ms, so larger timeouts are silently broken.' — message mentions setTimeout AND 2^31-1 clamping per NFR-DR-S-009.",
+        "T-026 (fetchAndHandleMultipart side) — fetchAndHandleMultipart still rejects with 'fetchAndHandleMultipart: not yet implemented (Sprint 5)' per the Sprint 5 contract (knownIssues[] documents this). The static-type FR-006 contract is enforced by MultipartHandlerOptions's required-fields shape; the dedicated T-026 runtime test for the wrapper lands in Sprint 5."
+      ]
+    },
+    {
+      "id": 2,
+      "summary": "Idle timeout (T-009 + T-010 + T-073) — fires per FR-007 with idleTimeoutMs field; per-chunk reset works; reset rides source 'data' NOT onProgress per FR-DR-A-025",
+      "status": "pass",
+      "evidence": [
+        "T-009 idle fires after 6s stall with 5s window: tests/integration/parse-timeouts.test.ts:199-232 — slowReadable with endAfterChunks=false stalls; vi.advanceTimersByTimeAsync(6_000) fires idle; captured instanceof MultipartIdleTimeoutError; .idleTimeoutMs === 5000; source.destroyed === true.",
+        "T-010 per-chunk reset success: lines 243-275 — splits envelope into ~10 chunks at 4s gap each; idle window 5s; full iteration succeeds; collected === ['body-0']. Total wallclock ~40s, well under 60s total.",
+        "T-073 idle reset rides source 'data' NOT onProgress: lines 335-364 — same shape as T-010 but explicitly with NO onProgress option; succeeds. The companion test at lines 366-396 asserts onProgress fires per-yielded-part NOT per source chunk (3 parts → 3 calls; assertion is ≥3 AND ≤4 to allow Sprint 5 completion tick).",
+        "Implementation: src/parse-multipart-related.ts:358-364 onSourceData calls timers.resetIdle() — verified the resetIdle is in onSourceData, NOT in fireProgress (which is at lines 248-264 and only fires per part via line 313).",
+        "Direct unit verification: tests/unit/timers.test.ts:23-77 covers idle fires after window, resetIdle defers fire, post-cleanup resetIdle is no-op.",
+        "src/internal/timers.ts:152-154 onIdle constructs MultipartIdleTimeoutError(opts.idleTimeoutMs) — positional arg matching Sprint 1's signature; idleTimeoutMs field surfaces correctly per the unit test assertion at timers.test.ts:39-42."
+      ]
+    },
+    {
+      "id": 3,
+      "summary": "Total timeout (T-011) — MultipartTotalTimeoutError fires regardless of activity; totalTimeoutMs field correct",
+      "status": "pass",
+      "evidence": [
+        "T-011 total fires with bytes still arriving: tests/integration/parse-timeouts.test.ts:286-324 — slowReadable with 1-byte chunks at 1s gap, idleTimeoutMs:60_000, totalTimeoutMs:5_000. After advanceTimersByTimeAsync(6_000), captured instanceof MultipartTotalTimeoutError; .totalTimeoutMs === 5_000; source.destroyed === true.",
+        "Note on field value: the brief mentions totalTimeoutMs:60_000 in success criteria #3 but the generator's choice of 5_000 in the test is functionally equivalent — both prove the typed field is set to the configured cap. The contract is 'totalTimeoutMs is whatever was configured' and the test asserts that.",
+        "Direct unit verification: tests/unit/timers.test.ts:87-104 covers total fires after configured window even with frequent resetIdle calls.",
+        "Implementation: src/internal/timers.ts:156-158 onTotal constructs MultipartTotalTimeoutError(opts.totalTimeoutMs); src/internal/timers.ts:199 setTimeout(onTotal, opts.totalTimeoutMs) is armed once on entry and never reset."
+      ]
+    },
+    {
+      "id": 4,
+      "summary": "Abort (T-012 + T-013 + F-S-006 reason contract) — mid-stream and already-aborted both work; reason is verbatim",
+      "status": "pass",
+      "evidence": [
+        "T-012 mid-stream abort: tests/integration/parse-abort.test.ts:111-139 — for-await loop aborts after part 0; captured instanceof MultipartAbortError; .reason === 'mid-stream-cancel'; source.destroyed === true after settle.",
+        "T-012 in-flight body destroyed: lines 141-169 — captures part.body before abort; after settle, capturedBody.destroyed === true.",
+        "T-013 already-aborted at call time: lines 67-87 — controller pre-aborted with 'preflight'; first .next() rejects with MultipartAbortError; .reason === 'preflight'.",
+        "T-013 cleanup runs on early-throw: lines 89-108 — controller.abort() (no arg); first .next() rejects; source.destroyed === true after settle (proves the iterator's finally ran cleanup() even on the early-throw path; cleaned flag idempotency holds).",
+        "Runtime spot-check: `node -e \"... ctrl.abort('user'); ... await it.next();\"` prints 'threw: MultipartAbortError - reason: user' — confirms the verbatim-reason contract on the production dist/.",
+        "F-S-006 string verbatim: parse-abort.test.ts:172-196 — string reason; identity-equal forward; message does NOT contain the reason string.",
+        "F-S-006 Error verbatim: lines 198-219 — Error instance; expect(.reason).toBe(reason) (object identity).",
+        "F-S-006 undefined-arg → engine DOMException: lines 221-245 — abort() without arg; .reason === ctrl.signal.reason (whatever the engine produces).",
+        "F-S-006 no-leakage: lines 247-280 — arbitrary caller object; identity-equal forward; JSON.stringify(.reason) does NOT contain 'body-0' or BOUNDARY; message also does not.",
+        "Implementation already-aborted path: src/parse-multipart-related.ts:219-224 (the if block: if (timers.signal.aborted) push abortError into queue — the for-await throw surfaces it on first .next()). The setupTimers also detects already-aborted at src/internal/timers.ts:187-193 and stores the error there.",
+        "Implementation reason-verbatim path: src/internal/timers.ts:149 abortInternally(new MultipartAbortError(callerSignal?.reason)) and line 188 storedError = new MultipartAbortError(callerSignal.reason). MultipartAbortError takes the reason as constructor arg and stores it as a readonly field; the message is fixed (no embedding) — verified at runtime."
+      ]
+    },
+    {
+      "id": 5,
+      "summary": "Validation table (T-060..T-065) + race (T-046) + branch coverage gates",
+      "status": "pass",
+      "evidence": [
+        "T-060 (zero) / T-061 (NaN) / T-062 (±Infinity) / T-063 (-1) / T-064 (1.5) covered for BOTH timeout names: tests/unit/validate-timeout.test.ts:60-94 — table-driven loop runs each row twice, once for idleTimeoutMs and once for totalTimeoutMs; each asserts TypeError + 'must be a positive finite integer' + the field name.",
+        "T-046 race (first-fire-wins): tests/integration/parse-abort.test.ts:294-348 — fake-timer driven; idle window 1000ms with chunk at 100ms means idle fires at 1100ms; setTimeout(() => ctrl.abort('race'), 1100) schedules abort at the same tick. After advanceTimersByTimeAsync(2000), captured is one of MultipartIdleTimeoutError or MultipartAbortError (the test correctly does NOT bind to which side wins — first-fire-wins is the contract). Cleanup invariants asserted: source.destroyed, dicer listener counts (part===0, finish===0, error≥1), all part streams destroyed.",
+        "Race direct unit verification: tests/unit/timers.test.ts:272-314 covers both directions of first-fire-wins (idle-first then abort ignored; abort-first then idle ignored) — abortError() returns the FIRST class.",
+        "Branch coverage src/internal/timers.ts: 100% line / 96% branch / 100% function (≥90% gate) — verified from `pnpm coverage` output. The single uncovered line 139 is `if (controller.signal.aborted) return` short-circuit inside abortInternally — the generator correctly notes this is empirically exercised by T-046's first-fire-wins integration test.",
+        "Branch coverage src/internal/validate-timeout.ts: 100% / 100% / 100% — verified from `pnpm coverage`.",
+        "Branch coverage src/parse-multipart-related.ts: 95.78% line / 90% branch / 100% function — branch at exactly the 90% gate (Sprint 3 was 92%; the 2% drop comes from new Sprint 4 branches that have full happy-path coverage but a few defensive branches like 'cleaned || abortPushed' early-return at line 235 that aren't deterministically reachable). Still meets the gate.",
+        "pnpm typecheck exit 0; pnpm lint --max-warnings=0 exit 0; pnpm test exit 0; pnpm coverage exit 0."
+      ]
+    }
+  ],
+  "rubric": {
+    "functionalCorrectness": {
+      "score": 3,
+      "rationale": "Build green: pnpm build produces dist/index.{js,cjs,d.ts,d.cts}. Test count grew from Sprint 3's 17 files / 128 tests to Sprint 4's 21 files / 194 tests (+4 files, +66 tests — all real, no .skip/.todo/.only; pnpm test exit 0 with 194/194 passing). pnpm typecheck + pnpm lint --max-warnings=0 + pnpm test all exit 0. Runtime spot-checks all pass: 12-symbol export probe against dist/index.js prints 'OK 12-symbol export'; happy path (parseMultipartRelated yields part.index 0); missing-timeout throws TypeError with NFR-DR-S-009 message; already-aborted with reason='user' produces MultipartAbortError with .reason === 'user' on first .next(); fetchAndHandleMultipart STILL throws 'not yet implemented (Sprint 5)' marker. T-071 invariant: zero `from 'dicer'` matches in dist/index.d.ts AND dist/index.d.cts (only match is the 1 in dist/index.js's runtime import which is correct). NFR-008 invariant: pnpm pack --json manifest enumerates exactly { dist/, README.md, LICENSE, package.json } (plus the .map files which are sibling-of-dist publishables — Sprint 3 reported the same shape). package.json#dependencies.dicer === '0.3.1' exact; #engines.node === '>=20.18.0'; sideEffects === false; exports['.'] resolves to the dual-emit triple. No regressions; all 5 success criteria pass; no critical bugs."
+    },
+    "codeQuality": {
+      "score": 3,
+      "rationale": "Standards compliance verified: zero `as any` / `as never` casts in src/ (only matches are JSDoc/comments documenting the absence). Zero silent catches in src/ (Grep for `catch\\s*\\([^)]*\\)\\s*\\{\\s*\\}` returns no matches). FR-DR-A-028 normalization preserved BYTE-IDENTICAL at src/parse-multipart-related.ts:76-77: `const Dicer: DicerDefaultExport = (dicerMod as { default?: DicerDefaultExport }).default ?? dicerMod;` — generator claimed lines 76-77, verified by Read. Sprint 3 had it at lines 63-64; the line shift comes from added imports (timers.js, validate-timeout.js) and JSDoc expansion above, but the call expression is unchanged byte-for-byte. FR-012 listener-before-pipe invariant preserved at src/parse-multipart-related.ts:392-400 (all dicer + source listeners attached BEFORE source.pipe(dicer)) — and Sprint 4 correctly extends this by constructing setupTimers BEFORE listener attachment (line 204) and BEFORE pipe (so timer-driven aborts can never miss synchronous fires). Sprint 4 cleanup() at lines 408-473 extends Sprint 3's cleanup with: (1) timers.signal.removeEventListener at line 471, (2) timers.cleanup() at line 472. The cleaned-flag idempotency from Sprint 3 (line 409 `if (cleaned) return`) holds — first call runs all 6 cleanup steps PLUS the new timer cleanup; second call no-ops. Logger event-style at every site (no console.log). Validate-timeout uses TypeScript assertion function signature `: asserts value is number` correctly. setupTimers is a closure-scoped state machine — the per-file ESLint override for max-lines-per-function is justified (rationale documented in eslint.config.mjs:106-113) and consistent with Sprint 2's queue-notifier.ts and Sprint 1/2/3's parse-multipart-related.ts overrides. queue-notifier.ts was NOT modified in Sprint 4 (verified) — Sprint 2/3's signalError idempotency continues to handle multi-error race."
+    },
+    "specAdherence": {
+      "score": 3,
+      "rationale": "FR-006 / JC-3 (timeouts required + validated) implemented per text — validatePositiveTimeout calls at parse-multipart-related.ts:161-162 are the FIRST executable code, before any input normalization or dicer construction. Both fields enforced; error message mentions setTimeout clamping per NFR-DR-S-009. FR-007 (idle timeout) implemented per text — setupTimers arms setTimeout(onIdle, idleTimeoutMs) at timers.ts:198; resetIdle clears+rearms at timers.ts:176-180; per-chunk source 'data' listener calls timers.resetIdle() at parse-multipart-related.ts:363. FR-008 (total timeout) implemented per text — setupTimers arms setTimeout(onTotal, totalTimeoutMs) at timers.ts:199; never reset. FR-009 (AbortSignal propagation + already-aborted) implemented per text — already-aborted detected synchronously inside setupTimers (timers.ts:187-193) AND surfaced via queue.signalError in parseMultipartRelated (parse-multipart-related.ts:219-224); mid-stream caller-abort wires through onCallerAbort listener at timers.ts:145-150. FR-DR-A-025 (idle reset is per-chunk NOT per onProgress) explicitly implemented — onSourceData at parse-multipart-related.ts:358-364 calls timers.resetIdle(); fireProgress (lines 248-264) does NOT. Verified by T-073's spy assertion. FR-DR-A-026 (timer ownership in Layer A) honored — setupTimers lives at src/internal/timers.ts (Layer C) but is constructed and owned by Layer A's parseMultipartRelated; src/fetch-and-handle-multipart.ts is unchanged this sprint (the Sprint 5 wrapper will forward DOWN to parseMultipartRelated rather than constructing its own TimerState). F-S-006 reason contract honored — MultipartAbortError takes callerSignal?.reason verbatim at timers.ts:149/188; the message is fixed in the error class so caller bytes never embed; verified by no-leakage integration test. NFR-DR-S-009 message contains 'setTimeout' AND '2^31' — verified via `pnpm test` and runtime spot-check. Deferrals NOT silently included: fetchAndHandleMultipart is STILL the Sprint 5 stub (verified at runtime); resource caps (Sprint 6) NOT implemented; full formatErrorEmbed (Sprint 7) NOT implemented (truncate-only stub from Sprint 3 preserved); dedicated T-079 upper-bound test correctly deferred to Sprint 7 (Sprint 4 ships the BEHAVIOR via T-064b but the formal T-079 row lives in Sprint 7 per planner technicalNotes). All listed deferrals are documented in sprint-4-report.json knownIssues[]."
+    },
+    "completeness": {
+      "score": 3,
+      "rationale": "All 5 success criteria from sprints/plan.json id=4 pass (see successCriteria[] above). Coverage gates ALL met: src/internal/timers.ts at 100% line / 96% branch / 100% function (≥90% gate); src/internal/validate-timeout.ts at 100% / 100% / 100% (≥90% gate); src/parse-multipart-related.ts at 95.78% line / 90% branch / 100% function (≥90% gate; held to gate from Sprint 3's 92% — the 2% delta is acceptable headroom). Every FR allocated to Sprint 4 (FR-006, FR-007, FR-008, FR-009, FR-DR-A-025, FR-DR-A-026) has implementing code AND a real test (28 validate-timeout unit + 16 timers unit + 12 timeouts integration + 10 abort integration = 66 new tests for 6 FRs + F-S-006). Two NEW files (validate-timeout.ts and timers.ts) created with full type signatures, JSDoc, and dedicated unit suites. Sprint 4 brief estimated '~25-30 new tests'; generator delivered 66 — all real (no .skip/.todo/.only); over-shoot is documented in assumptions[] and acceptable. Deferrals (Sprint 5 fetch wrapper, Sprint 6 caps, Sprint 7 formatErrorEmbed full + T-079 dedicated) are explicit and tracked. Standards hash matches generator's standardsHash exactly. T-071 invariant + NFR-008 pack manifest invariant + dicer pin + engines.node all preserved."
+    },
+    "designQuality": {
+      "applicable": false,
+      "score": null,
+      "rationale": "Not applicable — this is a Node library project with no UI surface."
+    }
+  },
+  "criticalBugs": [],
+  "minorIssues": [
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 235,
+      "severity": "minor",
+      "description": "The combined-signal handler `onCombinedAbort` at lines 234-240 has an early-return guard `if (cleaned || abortPushed) return` which is defensive but not deterministically reachable in tests — the controller signal is operation-scoped and `{ once: true }` is set on the listener, so the listener can only fire once. The branch is real (it handles the case where setupTimers' internal cleanup races with the listener firing) but contributes a small portion of the parse-multipart-related.ts branch-coverage drop from Sprint 3's 92% to Sprint 4's 90%. Still above gate; not a critical bug. Same shape as the timers.ts:139 `if (controller.signal.aborted) return` short-circuit captured in the generator's knownIssues[]. Could be exercised by a fault-injection test in a later sprint, or accepted as defensive code."
+    },
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 408,
+      "severity": "trivial",
+      "description": "The cleanup() function is now 65+ lines (Sprint 3 was ~58). Not a violation — the per-file max-lines-per-function override at eslint.config.mjs:93-114 covers it. The added timer-cleanup section at lines 466-472 (3 lines + 6 lines of comment) extends Sprint 3's pattern correctly and idempotently. No issue with code quality; just noting growth for future sprints to track."
+    },
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 213,
+      "severity": "trivial",
+      "description": "rawHeaders on StreamingMultipartPart is still set to Buffer.alloc(0) (Sprint 2/3 carry-over, preserved through Sprint 4). data-model.md doesn't mandate Sprint 4 populate it; flagged in Sprint 2/3 QA minorIssues; future sprint will address."
+    },
+    {
+      "file": "src/internal/default-logger.ts",
+      "line": 37,
+      "severity": "trivial",
+      "description": "Coverage on this file at 20% (Sprint 1 carry-over — caller-supplied loggers are used in every test that exercises a log path; the console.warn fallback branches are unexercised). Sprint 4 doesn't change this; it's not Sprint 4's responsibility to lift."
+    },
+    {
+      "file": "src/internal/flatten-headers.ts",
+      "line": 47,
+      "severity": "trivial",
+      "description": "Coverage at 86.2% statements / 83.3% branches (Sprint 2/3 carry-over). Not Sprint 4's responsibility to lift."
+    },
+    {
+      "file": "src/parse-multipart-related.ts",
+      "line": 295,
+      "severity": "trivial",
+      "description": "The setImmediate-deferred truncation detector (Sprint 3 carry-over at line 384 in this version) still mis-fires when a consumer iterates without draining part bodies on a well-formed envelope. Documented in Sprint 3 minorIssues; preserved in Sprint 4. Real-world callers always drain bodies; every test in the suite drains bodies; no test fails. Not Sprint 4's responsibility."
+    }
+  ],
+  "assumptionsReview": [
+    {
+      "context": "How to thread the caller's AbortSignal reason from setupTimers into MultipartAbortError without library-side synthesis (F-S-006)",
+      "choice": "setupTimers reads callerSignal.reason at the moment of fire (in onCallerAbort) AND at already-aborted detection. MultipartAbortError stores reason as a readonly instance field WITHOUT embedding it into the message",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by Read at src/internal/timers.ts:145-150 and 187-193. The MultipartAbortError class (per Sprint 1's errors.ts and the test at parse-abort.test.ts:194-195/277-279) has a fixed message; the reason field carries the caller value verbatim. F-S-006 contract upheld. The 4 reason-variant integration tests (string/Error/undefined-arg/object) cover the contract surface."
+    },
+    {
+      "context": "FR-009 already-aborted contract surfaces via queue.signalError + iterator-loop-throw (NOT a synchronous throw at function entry)",
+      "choice": "Mirror Sprint 3's pattern: validatePositiveTimeout throws inside the generator body (surfaces from first .next()); already-aborted check pushes abort error into queue (queue.signalError) — for-await loop's item.type==='error' branch then throws on first iteration",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by parse-multipart-related.ts:219-224 — the if-block runs after setupTimers but before listener attachment + pipe. Caller-observable behavior (first .next() rejects synchronously with MultipartAbortError) is identical to a true synchronous throw. Both T-013 tests (lines 67-87 and 89-108 of parse-abort.test.ts) verify this works. The runtime spot-check confirms .reason flows through verbatim. Async generators cannot truly throw at construction time (Sprint 3's existing T-002/T-003/T-025 contract), so this is the only correct shape. The benefit: cleanup runs through the iterator's finally exactly once, on the same path as every other error."
+    },
+    {
+      "context": "Combined-signal handler attachment timing — must be wired BEFORE pipe(); already-aborted skip-the-attach is symmetric with cleanup's removeEventListener",
+      "choice": "Two cases: (a) caller signal already aborted → setupTimers stores error AND aborts controller AND does NOT install caller-signal listener (timers.ts:187-193); the parse-multipart-related-level combined-signal handler is also gated by `if (!timers.signal.aborted)` at line 244 to skip the attach when already-aborted. (b) caller signal aborts later → setupTimers' onCallerAbort listener fires, abortInternally stores error and aborts controller; combined-signal listener at parse-multipart-related-level fires once (registered with { once: true })",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by Read of both files. The setupTimers construction at parse-multipart-related.ts:204-211 happens BEFORE listener attachment (lines 392-397) and BEFORE pipe (line 400) — so timer-driven aborts never miss a synchronous fire. The architecture.md §3 'Layer C MUST NOT import from Layer A or B' rule is upheld (timers.ts imports only from errors.ts; parse-multipart-related.ts is the one wiring queue+timers together at the Layer A level). The abortPushed boolean at line 187/235 is belt-and-suspenders against the listener firing AFTER the synchronous already-aborted push — defensive but correct."
+    },
+    {
+      "context": "Fake-timer fixture (slowReadable with endAfterChunks flag) — does it model real network stalls?",
+      "choice": "Custom Readable whose read() schedules push via setTimeout(callback, gapMs). With faked timers, advanceTimersByTimeAsync releases the setTimeouts, which lets read() push the chunk → parseMultipartRelated's 'data' listener fires → timers.resetIdle(). For idle/total tests the fixture stays silent forever (endAfterChunks=false) to model a hung connection",
+      "judgment": "ACCEPTABLE",
+      "rationale": "The fixture composes cleanly with vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) at every test site (verified at parse-timeouts.test.ts:193, 237, 280, 329 and parse-abort.test.ts:286). The endAfterChunks=false flag is exactly the right shape for idle-stall tests — without it, Readable.from would push EOF and trigger MultipartTruncatedError instead. Backpressure semantics: a single chunk per read() call uses dicer's natural pipe machinery; the unit tests in tests/unit/timers.test.ts also assert the contract directly without the fixture, providing a second-derivative verification. NOT cheating — this is standard vitest fake-timer testing."
+    },
+    {
+      "context": "ESLint per-file override added for src/internal/timers.ts (max-lines-per-function: off)",
+      "choice": "Add timers.ts to the existing override block at eslint.config.mjs:93-114 alongside parse-multipart-related.ts and queue-notifier.ts; rationale documented in the comment block",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by Read of eslint.config.mjs lines 93-114. setupTimers is a closure-scoped state machine sharing storedError/cleaned/idleTimer/totalTimer across resetIdle/runCleanup/abortInternally/onCallerAbort plus the initialization branch — splitting would need a private state object passed by reference, obscuring the first-fire-wins discipline. Same shape as Sprint 2's queue-notifier.ts override. Comment block at eslint.config.mjs:106-113 documents the rationale clearly. Justified, NOT scope creep — the rule is `warn` so the override is a deliberate signal that the code review path approved this single-function shape."
+    },
+    {
+      "context": "queue-notifier.ts was NOT modified in Sprint 4",
+      "choice": "Verified via Read — Sprint 3's shape preserved verbatim. Sprint 2/3's signalError accepts multiple error pushes (ignores duplicates effectively because the consumer drains the first one and the rest stay buffered)",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Sprint 4 brief expressly notes that the queue-notifier should not need modification because Sprint 2/3 already handle multi-error race. The Sprint 4 implementation pattern (combined-signal handler pushes ONE discriminated error into the queue via queue.signalError; the abortPushed flag prevents duplicate pushes) is fully compatible with the existing queue API. No scope creep into Layer C internals."
+    },
+    {
+      "context": "No new devDependencies added in Sprint 4",
+      "choice": "package.json devDependencies unchanged from Sprint 3",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified: package.json#dependencies.dicer === '0.3.1' exact; no devDeps added; pnpm pack manifest still { dist/, README.md, LICENSE, package.json } (plus .map files which Sprint 3's QA also recorded as published). Toolchain unchanged from Sprint 3."
+    },
+    {
+      "context": "exactOptionalPropertyTypes constraint on `signal: opts.signal` — used conditional spread to omit when undefined",
+      "choice": "`...(opts.signal !== undefined ? { signal: opts.signal } : {})` at src/parse-multipart-related.ts:208",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified by Read. Same pattern Sprint 2 uses at parse-multipart-related.ts:302-303 for contentId/contentLength. NFR-DR-A-013-style internal-types-MAY-be-bare-optional is preserved (TimerStateOptions.signal at timers.ts:53 is `AbortSignal | undefined` declared optional). Idiomatic TypeScript pattern under exactOptionalPropertyTypes. No `as any` workaround."
+    },
+    {
+      "context": "MultipartIdleTimeoutError / MultipartTotalTimeoutError construction uses positional arg from Sprint 1 (NOT object-bag from brief example)",
+      "choice": "Followed Sprint 1's actual constructor signature `new MultipartIdleTimeoutError(idleTimeoutMs)` (positional first arg)",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified at src/internal/timers.ts:153, 157, 188 and the unit test assertions at tests/unit/timers.test.ts:39-42, 100-102. The brief's example was illustrative; the implementation correctly defers to the actual API. The error fields (idleTimeoutMs, totalTimeoutMs) surface as readonly instance properties exactly as the brief expects. Modifying Sprint 1's error classes is correctly out of scope."
+    },
+    {
+      "context": "Sprint 4 added 66 new tests vs the brief's '~25-30 new Sprint 4 tests' estimate",
+      "choice": "Slightly above. Breakdown: 28 validate-timeout (table-driven covers 14 distinct rejection reasons × 2 field names = 28) + 16 timers + 12 timeouts integration + 10 abort integration = 66",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Verified via pnpm test output. All 66 are real (no .skip/.todo/.only); coverage gates met; no flake observed across multiple pnpm test runs. The validate-timeout count is high because the brief's T-060..T-065 alone is 6 rows × 2 names = 12 tests, plus boundary + non-number + upper-bound + error-shape adds another 16 — all reasonable for a new file targeting NFR-DR-S-009. Over-shooting is preferable to under-shooting; the new files have 100% / 100% / 100% coverage which is the right floor."
+    },
+    {
+      "context": "T-046 race test asserts disjunction `instanceof MultipartIdleTimeoutError || instanceof MultipartAbortError` instead of forcing a deterministic winner",
+      "choice": "Asserts the disjunction; tests for first-fire-wins via the cleanup invariants (source.destroyed, listener counts) rather than which-class-wins",
+      "judgment": "ACCEPTABLE",
+      "rationale": "First-fire-wins is the contract; which side wins under fake timers is timing-dependent and would couple the test to vitest version. The cleanup-idempotency invariant (source destroyed once, listener counts stable) is what's contractually required and is what the test asserts. If first-fire-wins ever broke (e.g. both errors surfaced), the captured value would be the second-fire which has no instanceof match — the test would fail. Sound test design."
+    },
+    {
+      "context": "The dedicated T-079 upper-bound test belongs to Sprint 7; Sprint 4 ships the bound enforcement behavior + a T-064b row in the validate-timeout suite",
+      "choice": "Implement the > 2_147_483_647 reject branch in Sprint 4's validatePositiveTimeout AND ship a T-064b row in tests/unit/validate-timeout.test.ts (lines 139-170); the dedicated T-079 row labeled in test-plan.md belongs to Sprint 7",
+      "judgment": "ACCEPTABLE",
+      "rationale": "Sprint 4 planner technicalNotes explicitly direct this: 'the upper-bound test lands in Sprint 7 but the bound is enforced here so callers get correct behavior immediately.' Verified via Read of validate-timeout.ts:64 (the > MAX_SAFE_TIMEOUT_MS check) and the boundary test at validate-timeout.test.ts:139-146. The error message at validate-timeout.ts:69 contains both 'setTimeout' AND '2^31' as required by NFR-DR-S-009 — verified at runtime. Sprint 7 will add the formal T-079 row + parseMultipartRelated companion."
+    }
+  ],
+  "regressions": [],
+  "notes": "Sprint 4 cleanly delivers the timeouts/abort/validation gap. parseMultipartRelated now enforces FR-006 / JC-3 via validatePositiveTimeout calls at the very top of the generator (lines 161-162) — both timeouts REQUIRED, both validated against [1, 2^31-1] integer with NFR-DR-S-009 setTimeout-clamping message text. setupTimers (new Layer C module at src/internal/timers.ts) constructs a composite AbortSignal aggregating idle/total/caller-abort with first-fire-wins semantics; resetIdle is per-chunk via the source 'data' listener (FR-DR-A-025 — NOT via onProgress); cleanup is idempotent. parseMultipartRelated wires setupTimers BEFORE listener attachment + pipe (preserving FR-012 invariant); checks already-aborted at call time and pushes abort error into queue for sync-reject on first .next() (FR-009); attaches a combined-signal handler that pushes the discriminated error class into the queue when ANY of idle/total/caller-abort fires; extends Sprint 3's cleanup() to also remove the combined-signal listener AND call timers.cleanup() — all under the same `cleaned` flag idempotency. Sprint 3's listener-leak hygiene is preserved verbatim — every Sprint 3 test still passes. FR-DR-A-028 normalization at parse-multipart-related.ts:76-77 preserved BYTE-IDENTICAL from Sprint 1/2/3. Build green: pnpm typecheck + pnpm lint --max-warnings=0 + pnpm test all exit 0; 21 test files / 194 tests pass; pack manifest STILL exactly { dist/, README.md, LICENSE, package.json }; dicer pinned 0.3.1; engines >=20.18.0; dist/index.d.ts + dist/index.d.cts have zero `from 'dicer'` matches (T-071); branch coverage on src/internal/timers.ts at 96% (≥90% gate), src/internal/validate-timeout.ts at 100% (≥90% gate), src/parse-multipart-related.ts at 90% (≥90% gate, dropped 2% from Sprint 3 due to defensive new branches but still meets gate). Runtime spot-checks all pass: 12-symbol export, happy path, missing-timeout TypeError with NFR-DR-S-009 message, already-aborted MultipartAbortError with verbatim reason, fetchAndHandleMultipart STILL Sprint 5 stub. F-S-006 reason contract verified by 4 dedicated integration tests (string/Error/undefined-arg/no-leakage). T-046 race verified at both unit and integration level. Deferrals (Sprint 5 fetch wrapper, Sprint 6 caps, Sprint 7 formatErrorEmbed full + dedicated T-079) are explicit and tracked in sprint-4-report.json knownIssues[] — no silent inclusion. Standards hash matches generator's standardsHash exactly. queue-notifier.ts NOT modified (verified). No `as any`, no `as never`, no silent catches. Verdict: PASS."
+}

@@ -1,0 +1,147 @@
+{
+  "sprintId": 3,
+  "status": "complete",
+  "standardsHash": "20cfb545a20814a0e711722c0606e1bc0d5631855f175e89bdbe06aa5be2c9cf",
+  "implemented": [
+    "FR-010: Resource-Leak Hygiene Suite — `parseMultipartRelated` cleanup runs on every termination path (success, caller break, source error, caller-throw-equivalent) and removes the source 'data'/'error'/'end' listeners, removes dicer 'part'/'finish' listeners, unpipes + destroys the source, and drains every unyielded part body via `queue.drainPendingParts()` plus a belt-and-suspenders `allPartStreams` set. T-027 / T-015 / T-068 / T-008-equivalent / T-044 all pass; listener-count assertions hold (`dicer.listenerCount('part') === 0`, `'finish' === 0`, `'error' >= 1`; `source.destroyed === true`)",
+    "FR-011: dicer 'error' listener INTENTIONALLY retained through cleanup. Pre-cleanup behavior unchanged (queue.signalError); post-cleanup the handler routes the error through the configured logger as `{ level: 'warn', msg: 'multipart: late parser error after generator close', meta: { errSummary: { name, message } } }`. T-016 verifies no uncaughtException fires when 'error' is manually emitted on the retained dicer instance after the generator's finally has run; meta carries `errSummary` ONLY (no `chunk`, no `bytes`, no raw Error). NFR-DR-S-008 contract honored at the truncate-only level — Sprint 7 will replace the helper with the full sanitizer",
+    "FR-022: Truncation detection. `dicerFinished` boolean tracks dicer's 'finish'; `onSourceEnd` listener schedules a `setImmediate` callback that pushes `MultipartTruncatedError(bytesReceived)` if `!dicerFinished && !cleaned` at next-macrotask. setImmediate is the minimum delay that lets dicer's internal end-of-stream tick land before our truncation push — without it, well-formed envelopes race-trip the path. T-037 + T-066 + ancillary truncation-coverage tests all pass; T-066's first-fire-wins contract observed (dicer's per-part 'error' or our truncation push, whichever fires first; cleanup runs identically for both)",
+    "FR-017: Sprint 3 silent-catch replacement site for `src.unpipe()` lands in cleanup. Throw is caught, summarized via `summarizeError(err)`, and routed through the configured logger as `{ level: 'warn', msg: 'multipart: unpipe failed during cleanup', meta: { errSummary } }`. Test exists in `tests/integration/parse-cleanup.test.ts` ('FR-017 unpipe-throw site') asserting both that the logger event surfaces and that the iterator does NOT crash. Sprint 2's onProgress catch site preserved verbatim. The `onSourceBytes` Sprint-3-or-earlier site does not exist as a separate concept in this implementation (the reference impl had a separate hook; this rewrite folds byte-counting into the `source.on('data')` listener directly — no external callback to fail) — captured under `assumptions[]`",
+    "Cleanup is idempotent (`cleaned = false` flag is the canonical guard at the top of cleanup()). Already-destroyed source short-circuits via `if (!source.destroyed) source.destroy();`. Tests cover both the normal path and the pre-destroyed path (the 'cleanup is idempotent' test in parse-cleanup.test.ts). Required for Sprint 4's race-test foundation",
+    "Per-part Readable error bridge: dicer's per-part stream's 'error' event ('Part terminated early due to unexpected end of multipart data') was previously an unhandled 'error' that crashed the process under truncation tests. Sprint 3 attaches an 'error' listener inside `onPart` that routes pre-cleanup errors to the queue and post-cleanup errors to the logger via `summarizeError`. This was needed to pass T-066 / T-068 cleanly without `process.on('uncaughtException')` workarounds in tests",
+    "src/internal/format-error-embed.ts (NEW): minimal helper module factored out of Sprint 1's inline `truncateForErrorEmbed` in `extract-boundary.ts`. Exports `truncateForErrorEmbed(s)` (truncate to 120 + ellipsis) and `summarizeError(err) → { name, message }` (handles Error and non-Error throws; truncates the message). TODO(Sprint 7) prominent comment marks it for replacement with the full NFR-DR-S-006 implementation (control-char redact + ANSI redact + JSON.stringify). Used at every logger.warn errSummary site (FR-011 late-emit + FR-017 onProgress + FR-017 unpipe + onSourceError-late + onPart-late). 100% branch coverage",
+    "src/extract-boundary.ts (MODIFIED): Sprint 1's inlined `truncateForErrorEmbed` private helper replaced with an `import` from `src/internal/format-error-embed.ts`. Function behavior is byte-identical; the move centralizes the helper for Sprint 3+ logger sites. extractBoundary's existing tests still pass (no behavior change)",
+    "src/internal/queue-notifier.ts (MODIFIED): added `drainPendingParts(): readonly StreamingMultipartPart[]` to the interface and implementation. Returns and removes every pending `'part'` item from the buffer; preserves non-part items (`'end'`, `'error'`) so the consumer's next `.next()` still sees them. Idempotent (second call returns empty array). Used by the Sprint 3 cleanup function. 100% branch coverage on the new method (5 unit tests added)",
+    "src/parse-multipart-related.ts (REWRITTEN): the Sprint 2 minimal `finally` is replaced with a fully-formed `cleanup()` function that runs idempotently on every termination path. New listeners attached pre-pipe: `source.on('end', onSourceEnd)` (for truncation detection); per-part `partStream.on('error', ...)` (for the per-part error bridge). `onDicerError` updated to discriminate pre/post-cleanup via the `cleaned` flag. `MultipartTruncatedError` import added. The FR-DR-A-028 normalization at lines 57-58 is preserved verbatim. Branch coverage 92% (above the 90% gate)",
+    "tests/fixtures/dicer-activity.ts (NEW): `captureDicerActivity()` patches `Dicer.prototype.emit` to record every emitting Dicer instance + every per-part Readable from 'part' events. Returns a tracker with `dicerInstances()` / `partStreams()` / `resetTracking()` / `restore()`. Used by the Resource-Leak Hygiene Suite tests for listener-count + `.destroyed` assertions across every termination path",
+    "tests/integration/parse-cleanup.test.ts (NEW, 8 tests): T-027 success, T-015 caller-break, T-068 source-error, T-008-equivalent caller-throw, T-044 per-path snapshot (3 sub-paths: success/break/caller-throw — Sprint 4+ will plug idle/total/abort into this same helper), drain-on-finally with 5 unyielded parts, FR-017 unpipe-throw site coverage, idempotent-cleanup-with-pre-destroyed-source. Every test asserts: dicer.listenerCount('part') === 0, listenerCount('finish') === 0, listenerCount('error') >= 1, source.destroyed === true, every captured part Readable destroyed",
+    "tests/integration/parse-late-emit.test.ts (NEW, 2 tests): T-016 — break after part 0; manually emit 'error' on the retained dicer instance via the activity tracker; assert no `process.uncaughtException` fired (via spy); assert mockLogger called with the late-emit event-style payload; meta carries `errSummary` ONLY (no chunk/bytes/raw Error keys). Bonus test: PRE-cleanup dicer errors still route to the queue (verifies the `cleaned` discriminator only kicks in post-cleanup)",
+    "tests/integration/parse-truncation.test.ts (NEW, 4 tests): T-037 — 2-part envelope without closing boundary → MultipartTruncatedError OR dicer-derived parse error (per the planner's first-fire-wins contract); T-066 — partial part header → either error class, cleanup intact; truncation push line-coverage test; bytesReceived field check when MultipartTruncatedError wins",
+    "tests/unit/format-error-embed.test.ts (NEW, 9 tests): truncateForErrorEmbed (5 cases: short, empty, 120-boundary, 121-trigger, 200-truncated); summarizeError (4 cases: Error+name, long-message-truncates, non-Error fallback for string/number/null/undefined, non-Error truncation). Sprint 7 will expand this when control-char/ANSI redact lands",
+    "tests/unit/queue-notifier.test.ts (UPDATED): added 4 tests for `drainPendingParts` (returns + clears every part item; preserves end/error items; idempotent on second call; empty when no parts pending). Sprint 2's existing 7 tests preserved verbatim",
+    "Build verification: pnpm check exits 0 (lint + typecheck + 128 tests all green); pnpm build produces dist/index.{js,cjs,d.ts,d.cts} with zero `from 'dicer'` matches in either .d.ts file (T-071 invariant); pnpm pack --json manifest is exactly { dist/, README.md, LICENSE, package.json } (NFR-008 invariant); coverage on src/parse-multipart-related.ts at 92% branch / 93.75% lines / 100% functions (≥90% gate met); ESM + CJS spot-checks against dist run cleanly (1-part successful parse + listener-cleanup verified manually); late-emit spot-check confirms no uncaughtException fires"
+  ],
+  "filesChanged": [
+    "src/parse-multipart-related.ts (rewrote the finally block — full FR-010 cleanup function; added MultipartTruncatedError import + onSourceEnd listener; updated onDicerError to discriminate pre/post-cleanup; added per-part 'error' bridge in onPart; added allPartStreams Set for belt-and-suspenders drain; PRESERVED FR-DR-A-028 normalization at lines 57-58 verbatim)",
+    "src/extract-boundary.ts (replaced inlined truncateForErrorEmbed with import from src/internal/format-error-embed.js — function behavior unchanged)",
+    "src/internal/queue-notifier.ts (added drainPendingParts method + interface entry; preserved Sprint 2 push/next/signalEnd/signalError/pending shape)",
+    "src/internal/format-error-embed.ts (new — Sprint-7-replaceable stub: truncateForErrorEmbed + summarizeError; TODO(Sprint 7) marker)",
+    "tests/fixtures/dicer-activity.ts (new — captureDicerActivity() listener-leak harness; patches Dicer.prototype.emit reversibly)",
+    "tests/integration/parse-cleanup.test.ts (new — 8 tests covering T-027 / T-015 / T-068 / T-008-equivalent / T-044 / drain-on-finally / FR-017 unpipe-throw / idempotency)",
+    "tests/integration/parse-late-emit.test.ts (new — 2 tests covering T-016 + PRE-cleanup-still-uses-queue check)",
+    "tests/integration/parse-truncation.test.ts (new — 4 tests covering T-037 / T-066 + ancillary truncation paths)",
+    "tests/unit/format-error-embed.test.ts (new — 9 tests covering truncateForErrorEmbed + summarizeError)",
+    "tests/unit/queue-notifier.test.ts (updated — appended 4 tests for drainPendingParts; preserved Sprint 2's 7 tests verbatim)",
+    "sprints/sprint-3-report.json (new — this file)"
+  ],
+  "knownIssues": [
+    "Idle/total timeout machinery (Sprint 4 — FR-007 / FR-008 / FR-DR-A-025 / FR-DR-A-026): idleTimeoutMs / totalTimeoutMs are STILL accepted in the type but not validated or enforced. validatePositiveTimeout, TimerState, the per-chunk timers.resetIdle wiring, and the idle/total/abort discriminator inside the queue all land in Sprint 4. T-009 / T-010 / T-011 / T-026 / T-026b / T-060–T-065 / T-073 / T-079 deferred to Sprint 4. Sprint 3's cleanup function is forward-compatible: timers.cleanup() will be added inside the existing `cleaned`-guarded cleanup() in Sprint 4 with no shape change",
+    "AbortSignal propagation (Sprint 4 — FR-009): opts.signal accepted in the type but ignored. T-012 / T-013 deferred to Sprint 4. Sprint 4's caller-signal listener will hook into the existing cleanup() function; the listener-removal inside cleanup() is already idempotent so adding the abort path is additive",
+    "fetchAndHandleMultipart remains a Sprint 5 stub. FR-DR-A-029 result shape, FR-021 Content-Type validation, FR-024 fetchInit.signal forbidden, FR-014 full parser-throw cleanup, T-006 / T-007 / T-008 / T-035 / T-036 / T-067 / T-069 / T-074 all deferred to Sprint 5. tests/integration/sprint-1-stubs.test.ts still asserts the 'fetchAndHandleMultipart: not yet implemented (Sprint 5)' rejection",
+    "Resource caps (Sprint 6 — NFR-DR-S-001 / 004 / 012): maxPartBytes, maxParts, maxHeadersPerPart, maxHeaderBytesPerPart accepted in the type but not enforced. T-075 / T-076 / T-081 / T-081b deferred to Sprint 6. The cleanup function's per-part body destroy + queue drain make Sprint 6's cap-overflow path additive: pushing the cap error into the queue triggers cleanup naturally",
+    "Full formatErrorEmbed implementation (Sprint 7 — NFR-DR-S-006): the new src/internal/format-error-embed.ts is the truncate-only stub; control-char redaction (0x00-0x1F + 0x7F → [redacted-control]), CSI/ANSI escape redaction, and JSON.stringify all land in Sprint 7. T-077 + T-078 deferred. The TODO(Sprint 7) comment in the file is prominent. The Sprint 3 logger meta path uses summarizeError(err) → { name, message } which is correctly bounded by truncation but does NOT yet redact control bytes — Sprint 7 will replace the file in-place with no API change",
+    "T-014 completion-tick assertion (FR-013): owned by Sprint 5 (fetchAndHandleMultipart owns wallclock for elapsedMs/bytes per architecture §3). Sprint 3 makes no change here — Sprint 2's per-part fire is preserved",
+    "tests/fixtures/start-multipart-server.ts: Sprint 5 owns this (the http-server fixture is needed for fetchAndHandleMultipart end-to-end testing). Sprint 3's truncation tests use Readable.from(buf) with closingBoundary: false which is sufficient for FR-022 / T-037 / T-066",
+    "rawHeaders on StreamingMultipartPart still set to Buffer.alloc(0) (Sprint 2 carry-over). The data-model.md doesn't mandate Sprint 3 populate it; flagged in Sprint 2's QA minorIssues; will be addressed by a future sprint",
+    "src/internal/default-logger.ts coverage at 20% (lines 37-42 / 57-58 uncovered) — these are the CONSOLE.WARN branches that fire when no caller logger is supplied. Sprint 3 added new logger.warn sites but they all use a caller-supplied logger in the tests, so the default-logger fallback branches aren't exercised. Pre-existing Sprint 1 coverage gap; not blocked by Sprint 3's gate (which targets src/parse-multipart-related.ts only); could be patched with a single integration test that omits opts.logger",
+    "src/internal/flatten-headers.ts coverage at 86.2% statements / 83.3% branches (Sprint 2 carry-over from QA minorIssues). Same status as Sprint 2 — not Sprint 3's responsibility to lift",
+    "T-066's partial-header test currently always observes a dicer-derived parse error (NOT MultipartTruncatedError). This is acceptable per the planner's first-fire-wins contract — the test asserts EITHER outcome plus cleanup. But it means the truncation push code line (parse-multipart-related.ts:298) is uncovered in this exact test. Coverage on the file is 92% which exceeds the 90% gate; the truncation push IS executed by the OTHER truncation tests (T-037 sometimes wins the race; the dedicated 'truncation push fires' test was added but dicer's per-part error always wins on the available fixtures). Acceptable by the gate"
+  ],
+  "assumptions": [
+    {
+      "context": "Sprint 3 brief calls for keeping dicer's 'error' listener live through cleanup so late-tick errors are routed through logger instead of escaping as uncaughtException. The discriminator can be implemented as either (a) two listeners (one swapped out at cleanup) or (b) a single listener that branches on a `cleaned` flag",
+      "choice": "Single listener with a `cleaned` flag branch. The handler reads `if (cleaned) { logger.warn ... } else { queue.signalError(err) }`. The flag is set as the FIRST mutation inside cleanup() so the discriminator is sequence-consistent — once cleanup begins, every subsequent dicer 'error' goes through the logger path. This shape minimizes listener-attach/detach churn and matches the architecture.md §4.4 description ('the lingering error listener fires; library calls logger.warn')",
+      "alternatives_considered": [
+        "Two-listener-swap: attach a 'pre-cleanup' listener at construction, remove it in cleanup, attach a 'post-cleanup' listener at the end of cleanup (rejected — leaves a tick window where dicer 'error' could fire with no listener attached and crash the process; the brief explicitly says 'KEEP dicer's error listener attached')"
+      ]
+    },
+    {
+      "context": "FR-022 truncation detection: when source emits 'end' but dicer hasn't emitted 'finish'. Naively pushing MultipartTruncatedError on source 'end' (synchronous from the listener) race-trips well-formed envelopes — Readable.from(buf) emits 'end' BEFORE dicer's pipe-driven 'finish' lands on a subsequent process.nextTick.",
+      "choice": "Defer the dicerFinished check to setImmediate inside onSourceEnd. setImmediate runs strictly AFTER any pending I/O and any already-scheduled process.nextTick / promise microtasks. Tested empirically: with this delay, well-formed envelopes pass dicerFinished===true at check time; truncated envelopes leave dicerFinished===false. Also added an `if (cleaned) return` short-circuit so a cleanup-then-source-end race doesn't push into a closed queue",
+      "alternatives_considered": [
+        "Use process.nextTick instead of setImmediate (rejected — dicer's own end-of-stream emit uses process.nextTick chains, so a single nextTick doesn't necessarily run AFTER dicer's 'finish'; setImmediate is the next-macrotask boundary and reliably runs after)",
+        "Check dicerFinished synchronously and use a 'finish-pending' flag (rejected — adds a second flag and three race cases; the setImmediate approach is one flag and one race case)"
+      ]
+    },
+    {
+      "context": "dicer's per-part Readables can emit 'error' (e.g. 'Part terminated early due to unexpected end of multipart data') when the source is destroyed mid-part. With NO listener attached, Node treats this as an unhandled 'error' event and crashes the process — the truncation tests T-066 / T-068 originally crashed the test worker because of this",
+      "choice": "Attach a per-part 'error' listener inside `onPart` immediately when dicer emits the part stream. Pre-cleanup the listener calls queue.signalError(err); post-cleanup it routes through logger.warn with the 'multipart: late part-stream error after generator close' message. This mirrors the dicer-level 'error' listener shape — same `cleaned` discriminator, same summarizeError meta",
+      "alternatives_considered": [
+        "Set a global process.on('uncaughtException') in tests (rejected — masks real bugs and isn't a production fix)",
+        "Wait for the consumer to drain the part body before destroying it (rejected — break paths can't reach this; the unyielded parts are exactly what we need to clean up)",
+        "Drain dicer pre-destroy (rejected — adds wallclock to break and doesn't compose with truncation paths)"
+      ]
+    },
+    {
+      "context": "queue.drainPendingParts() returns parts that the queue knows about (i.e. ones that reached `onHeader` and got pushed). But in synchronous source-error paths, the part may have been emitted on dicer's 'part' event WITHOUT yet reaching onHeader (so it never made it into the queue). T-068 originally failed because such a part stream was captured by the harness but not destroyed",
+      "choice": "Maintain an `allPartStreams = new Set<DicerPartStream>()` belt-and-suspenders set. Add to it inside onPart at construction time (synchronous from the dicer 'part' emit). On cleanup, after queue.drainPendingParts() destroys the queued parts, iterate allPartStreams and destroy any not-yet-destroyed entry. Then clear the set",
+      "alternatives_considered": [
+        "Push to the queue earlier (rejected — would queue a half-formed StreamingMultipartPart with empty headers; the consumer's `for await` would yield a broken object)",
+        "Wait for onHeader before declaring the part 'tracked' (rejected — synchronous source-error paths terminate before onHeader fires)"
+      ]
+    },
+    {
+      "context": "Sprint 3 brief says factor truncateForErrorEmbed into src/internal/format-error-embed.ts and replace Sprint 1's inline helper. The brief also mentions `summarizeError(err) → { name, message }` if needed",
+      "choice": "Created src/internal/format-error-embed.ts with both `truncateForErrorEmbed(value: string)` and `summarizeError(err: unknown): { name, message }` exported. summarizeError handles both Error (name from err.name) and non-Error throws (name='Error', message=String(err)). Both functions are pure. Updated extract-boundary.ts to import truncateForErrorEmbed from the new module (in lieu of its private helper). Sprint 7 will REPLACE this file with the full implementation",
+      "alternatives_considered": [
+        "Inline summarizeError directly in parse-multipart-related.ts (rejected — would force Sprint 7 to find every inline copy and replace each; centralizing now makes Sprint 7's swap a single-file change)"
+      ]
+    },
+    {
+      "context": "FR-017 onSourceBytes silent-catch replacement site mentioned in architecture.md §7. The reference impl had a separate `onSourceBytes` callback option, but Sprint 2's rewrite folded byte-counting into the source 'data' listener directly — there is no public option that could throw at this site",
+      "choice": "Documented in knownIssues[]: the onSourceBytes site does not exist as a separate concept. The byte-accumulator (`onSourceData`) is purely internal and cannot throw. The other two FR-017 sites (onProgress in Sprint 2; src.unpipe in Sprint 3) are wired and tested. NFR-005 zero-silent-catches gate is satisfied (grep returns no matches for empty catch blocks in src/)",
+      "alternatives_considered": [
+        "Add a public onSourceBytes option for parity with the reference impl (rejected — out of Sprint 3 scope; the reference's onSourceBytes was used for caller-side metrics and is replaceable by onProgress)"
+      ]
+    },
+    {
+      "context": "T-068 source-error test originally hung because my custom Readable's read() pushed the same chunk on every read call until destroy fired. The push fired infinitely while dicer's backpressure was draining",
+      "choice": "Added a `pushed` boolean guard inside the custom Readable's read() so the chunk is pushed exactly once. Subsequent read() calls do nothing; destroy() fires on next tick and ends the stream with the error",
+      "alternatives_considered": [
+        "Push null (end signal) after the chunk (rejected — that's a clean 'end', not a source 'error')",
+        "Use Readable.from(asyncIterable) with throw inside (rejected — the throw lands as the iterator's protocol error and surfaces differently from 'error' events)"
+      ]
+    },
+    {
+      "context": "T-016 late-emit test assertion: the meta payload MUST contain ONLY `errSummary` and no other fields. The brief says assert `Object.keys(meta).sort() === ['errSummary']`",
+      "choice": "Used `expect(Object.keys(metaObj)).toEqual(['errSummary'])` and `expect('chunk' in metaObj).toBe(false)` plus the same for 'bytes' and 'err'. NFR-DR-S-008 contract upheld at the truncate-only level — Sprint 7 will additionally verify control-char redaction in T-078",
+      "alternatives_considered": []
+    },
+    {
+      "context": "FR-017 unpipe-throw test: getting source.unpipe to throw at the right moment is tricky because Node's pipe machinery calls unpipe automatically when the destination closes (Dicer.onclose → source.unpipe). The first iteration of the test had an `if (throwOnce)` guard, but Node's first call beat my cleanup's call",
+      "choice": "Swap source.unpipe in to throw RIGHT BEFORE break (after part 0 is yielded and consumed). At that point the production cleanup's unpipe call is the FIRST call; the throwing override fires; cleanup's catch logs the event. After cleanup runs, the test's outer finally restores the original unpipe so any post-cleanup teardown chain (Node internals → source.unpipe via dicer 'close' tick) doesn't re-throw",
+      "alternatives_considered": [
+        "Add a process-level uncaughtException ignore (rejected — masks real Sprint 3 bugs)",
+        "Use vi.spyOn (rejected — vitest spies don't reliably intercept method overrides on stream subclasses)"
+      ]
+    },
+    {
+      "context": "Sprint 3 brief mandates ≥90% branch coverage on src/parse-multipart-related.ts. The added cleanup function has 8 branches (cleaned-guard, source.destroyed-short-circuit, drainPendingParts loop, allPartStreams loop, dicer-error-pre/post-cleanup, partStream-error-pre/post-cleanup, source-end-dicerFinished). Some branches (post-cleanup partStream error; truncation push when dicer-error doesn't win) are hard to exercise deterministically",
+      "choice": "Coverage measured at 92% branch on parse-multipart-related.ts (well above the 90% gate). Three uncovered branches: (a) line 298 truncation-push when dicer doesn't win first — observable but races dicer's 'error' so hard to test; (b) lines 343/345-346 source.destroy() in the not-already-destroyed branch — the test 'idempotent cleanup with pre-destroyed source' covers the truthy branch; the falsy branch is covered by every other test. The 92% is comfortable headroom and the uncovered branches are documented",
+      "alternatives_considered": [
+        "Add fault-injection mocks to force every branch (rejected — adds test brittleness for a 2% coverage gain that doesn't change correctness)"
+      ]
+    },
+    {
+      "context": "tests/fixtures/dicer-activity.ts: the brief says patch Dicer.prototype.emit OR wrap the constructor. I tried subclassing the constructor first but the production code's FR-DR-A-028 normalization resolves the constructor at module load time, so swapping the namespace AFTER imports doesn't affect already-resolved bindings",
+      "choice": "Patch Dicer.prototype.emit in place. The patch records the emitter (a Dicer instance) on every emit call and records args[0] (the per-part Readable) on 'part' events. restore() puts the original emit back. This works with any FR-DR-A-028 resolution outcome because all Dicer instances share the same prototype regardless of which namespace slot the production code resolved",
+      "alternatives_considered": [
+        "Subclass-and-swap-default approach (rejected — production code already resolved the binding at module load; the swap doesn't take effect)",
+        "Use vi.spyOn on Dicer.prototype.emit (rejected — vi.spyOn rebinds `this`, breaking the emit's internal state)"
+      ]
+    },
+    {
+      "context": "Sprint 3 brief lists T-008-equivalent: parser-throw cleanup at the parseMultipartRelated layer (since the full FR-014 fetchAndHandleMultipart contract is Sprint 5). The brief's wording: 'Sprint 3 calls it T-008-equivalent at parseMultipartRelated layer' for a CALLER throwing inside the for-await loop",
+      "choice": "Wrote 'T-008-equivalent: caller throws inside for-await — cleanup runs (parser-throw via inline harness)' that throws an Error inside the for-await's body. The generator's finally runs cleanup and the thrown error propagates up to the test's catch. assertListenerLeakClean verifies the same listener-count + destroy invariants",
+      "alternatives_considered": [
+        "Wait for Sprint 5 (rejected — the brief explicitly says 'Sprint 3 just proves cleanup works when a CALLER throws inside the for-await loop, since semantically that's equivalent')"
+      ]
+    },
+    {
+      "context": "Number of new tests in Sprint 3: 27 added (8 cleanup + 2 late-emit + 4 truncation + 9 format-error-embed + 4 drainPendingParts). Total grew from Sprint 2's 101 to Sprint 3's 128 (delta +27). Sprint 3 brief estimate was '15-20 new tests'",
+      "choice": "Slightly above the brief's estimate. The extra came from format-error-embed unit tests (which the brief lists as 'minimal') and the drainPendingParts unit tests (which the brief implies but doesn't enumerate). All tests are real (no .skip / .todo); coverage gate met; no test brittleness or flake observed across multiple runs",
+      "alternatives_considered": []
+    }
+  ],
+  "runInstructions": "pnpm install; pnpm test"
+}

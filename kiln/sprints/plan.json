@@ -1,0 +1,217 @@
+{
+  "projectName": "@ubercode/multipart-stream",
+  "totalSprints": 8,
+  "sprints": [
+    {
+      "id": 1,
+      "name": "scaffold-foundations",
+      "goal": "A buildable, importable, lintable package: dual-emit dist, LICENSE + README skeleton + repo metadata, hand-written dicer shim in place, and the lowest-risk public API surface (extractBoundary, the 7 error classes, Logger type, basic streamToString / streamToBuffer without maxBytes) exported from src/index.ts and covered by real tests.",
+      "userStories": ["US-008", "US-009", "US-010"],
+      "functionalRequirements": [
+        "FR-015",
+        "FR-016",
+        "FR-017",
+        "FR-018",
+        "FR-019",
+        "FR-020",
+        "FR-DR-A-027",
+        "FR-DR-A-028",
+        "FR-DR-D-001",
+        "FR-DR-D-004"
+      ],
+      "successCriteria": [
+        "pnpm build exit 0; dist/index.js, dist/index.cjs, and dist/index.d.ts all exist; node -e \"import('./dist/index.js').then(m => { if (typeof m.extractBoundary !== 'function') process.exit(1); for (const n of ['MultipartIdleTimeoutError','MultipartTotalTimeoutError','MultipartAbortError','MultipartTruncatedError','MultipartPartTooLargeError','MultipartHeadersTooLargeError','MultipartTooManyPartsError']) if (typeof m[n] !== 'function') process.exit(1); if (typeof m.streamToString !== 'function' || typeof m.streamToBuffer !== 'function') process.exit(1); })\" exits 0; grep dist/index.d.ts shows zero matches for `from ['\\\"]dicer['\\\"]` (T-071, FR-DR-A-027).",
+        "pnpm check (lint + typecheck + vitest run) exits 0 with zero ESLint warnings under --max-warnings=0; tests T-017, T-017b, T-018, T-018b, T-021, T-029, T-082, and the silent-catch lint/grep gates T-039 + T-043 pass; T-082 asserts every error class's `name` is its class name verbatim (NFR-DR-D-007).",
+        "pnpm pack --dry-run --json output enumerates exactly the file set { dist/, README.md, LICENSE, package.json } and nothing else (T-048, NFR-008); LICENSE is present at the repo root with MIT text and the line `Copyright (c) <year> Michael Hobbs` (FR-DR-D-001); package.json#repository.url and package.json#bugs.url are non-empty git+https URLs (FR-DR-D-004); package.json#dependencies.dicer === '0.3.1' exact (no caret, no tilde) and there are no other runtime deps (T-042); package.json#engines.node === '>=20.18.0' (T-041, NFR-DR-A-014); package.json#sideEffects === false and package.json#exports['.'] resolves to the dual-emit triple (T-040).",
+        "README.md contains non-empty H2 sections named exactly Install, Quickstart, API, Error handling, Compatibility, License; the Install block shows `pnpm add @ubercode/multipart-stream`; the Error handling block documents the cross-format `err.name` fallback for instanceof (T-050, NFR-DR-D-002, NFR-DR-D-007). Quickstart MAY use a parseMultipartRelated stub example for now — the runnable fetchAndHandleMultipart example is filled in by Sprint 5.",
+        "src/internal/dicer.d.ts exists and types only the surface used (Dicer constructor, 'part'/'finish'/'error'/'header' events, per-part Readable + DicerHeaderBag); pnpm typecheck passes without @types/dicer installed; the dicer import in src/parse-multipart-related.ts (placeholder file, OK if Sprint-2-stub) uses the FR-DR-A-028 normalization shape `const Dicer = (dicerMod as { default?: typeof DicerType }).default ?? dicerMod` with no `as any` (T-071, NFR-001 + NFR-DR-A-013).",
+        "JSDoc completeness gate (T-034) passes: each public symbol re-exported from src/index.ts (extractBoundary, streamToString, streamToBuffer, the 7 error classes, the Logger / StreamingMultipartPart / PartParser / ParseMultipartOptions / MultipartHandlerOptions / MultipartFetchResult / ProgressSnapshot type aliases) carries @param/@returns/@throws/@example as applicable (FR-020). Public option-bag types use the `field?: T | undefined` form (T-070, NFR-DR-A-013)."
+      ],
+      "relevantSpecDocs": [
+        "spec.md",
+        "data-model.md",
+        "api.md",
+        "architecture.md",
+        "test-plan.md",
+        "review-architect.md",
+        "review-domain.md"
+      ],
+      "technicalNotes": "Library-type Sprint 1 per kiln-init Phase 9 contract: real public API + real test, NOT placeholders. Implement only the lowest-risk surface that does not pull in dicer at runtime: extract-boundary.ts (ReDoS-resistant tokenizer per NFR-DR-S-011 — write it correctly the first time so the perf gate added in Sprint 7 is a no-op assertion), errors.ts (all 7 classes with stable `name` instance property per NFR-DR-D-007 — needed by Sprint 4+ but cheap to land now), stream-helpers.ts (streamToString + streamToBuffer with NO maxBytes — Sprint 6 adds the cap), and types.ts (every public type alias). The Logger event-style shim and default-logger.ts (console.warn fallback) ship now because every later sprint depends on them per FR-018. The dicer ambient shim at src/internal/dicer.d.ts ships now even though parseMultipartRelated.ts is a stub returning a not-implemented sentinel — the shim has to exist before Sprint 2 can typecheck. Sprint-1-wide NFR floor: NFR-001..NFR-005 (strict TS, dual-emit, Node 20.18+, dicer pin, zero silent catches), NFR-008..NFR-010 (publish surface + lint + README), NFR-DR-A-013/014, NFR-DR-D-002/007/010 (verbatimModuleSyntax), and NFR-DR-S-011 ReDoS-resistance for extractBoundary. Coding standards in standards/*.md apply from this sprint forward — silent catches are forbidden everywhere, including the three sites called out in FR-017 (which here only matters for the Logger plumbing, since parse-related code is stubbed)."
+    },
+    {
+      "id": 2,
+      "name": "parse-core-happy-path",
+      "goal": "A working parseMultipartRelated that yields StreamingMultipartPart objects in order from both Web Response inputs (Web ReadableStream → Readable.fromWeb) and raw Node Readable inputs (with explicit boundary), with all dicer/source listeners wired BEFORE pipe(), the queue+notifier bridge in place, and onProgress firing per-part — but NO timeout machinery, NO cleanup-on-cancel, NO truncation detection yet (those land in Sprints 3 + 4).",
+      "userStories": ["US-001", "US-002", "US-006", "US-011"],
+      "functionalRequirements": [
+        "FR-001",
+        "FR-002",
+        "FR-003",
+        "FR-004",
+        "FR-012",
+        "FR-013",
+        "FR-014"
+      ],
+      "successCriteria": [
+        "pnpm build exit 0; node -e \"import('./dist/index.js').then(m => { if (typeof m.parseMultipartRelated !== 'function') process.exit(1); })\" exits 0; the function returns an object with Symbol.asyncIterator, .next, .return, .throw (T-023, FR-001).",
+        "Integration tests T-001 (Response → 3 parts in order with lowercased headers), T-004 (Web ReadableStream input via Readable.fromWeb — NO `as never` regression — NFR-001/T-039), T-005 (raw Readable + boundary), T-022 (synchronous early-error from dicer surfaces from first iter.next() — proves listeners attached before pipe — FR-012), T-024, T-025, T-053, T-056, T-057 all pass.",
+        "Synchronous validation tests pass: T-002 (null body), T-003 (Content-Type without boundary=), T-025 (raw Readable without boundary option) — each rejects before any dicer construction with the spec-mandated error message; the Content-Type-related messages route their embedded header value through formatErrorEmbed (NFR-DR-S-006 lands fully in Sprint 7, but the helper is wired here so messages are stable).",
+        "PartParser FR-014 contract honored at the parseMultipartRelated layer: T-007 passes against an internal harness that does the parser-undefined-skip wrapper inline (the full fetchAndHandleMultipart wiring lands in Sprint 5; this sprint just proves the StreamingMultipartPart shape can drive a parser).",
+        "onProgress fires at least once per yielded part (T-014 partial — completion-tick assertion lands in Sprint 5 once fetchAndHandleMultipart owns wallclock); spy assertion: monotonic non-decreasing `bytes`, finite `rateBps`. onProgress is INFORMATIONAL only — there is intentionally no idle-reset wiring through it (FR-DR-A-025 enforced in Sprint 4, but the architectural shape is locked here).",
+        "pnpm check exits 0; coverage on src/parse-multipart-related.ts and src/internal/queue-notifier.ts ≥ 90% branch (NFR-007 incremental); the dicer import in parse-multipart-related.ts uses the FR-DR-A-028 default-export normalization (no `as any`) and typechecks against the Sprint-1 ambient shim."
+      ],
+      "relevantSpecDocs": [
+        "spec.md",
+        "data-model.md",
+        "api.md",
+        "architecture.md",
+        "test-plan.md"
+      ],
+      "technicalNotes": "Implements Layer A's happy path. Build the queue-notifier bridge (src/internal/queue-notifier.ts: push + next + pending + drain) and the input normalizer (src/internal/normalize-input.ts) first as pure modules. parseMultipartRelated wires: (1) normalizeInput → ParseInput, (2) extractBoundary on Response path, (3) Readable.fromWeb on Web body (typed cast `res.body as ReadableStream<Uint8Array>` — NOT `as never`), (4) `new Dicer({ boundary })` via the FR-DR-A-028 normalization, (5) attach 'part'/'finish'/'error' on dicer + 'data'/'error' on source — ALL BEFORE src.pipe(dicer), (6) yield queue items. NO timer wiring this sprint (idleTimeoutMs/totalTimeoutMs accepted in opts but not yet enforced — Sprint 4 lands the validatePositiveTimeout call + TimerState wiring; T-026b will then pass). NO truncation-detection (Sprint 3). NO maxPartBytes/maxParts/maxHeaders enforcement (Sprint 6). The finally-block this sprint is minimal (release queue references) — full FR-010/FR-011 cleanup with listener-removal + late-emit retention is Sprint 3. Tests for cleanup paths SHOULD be marked .skip with a TODO referencing Sprint 3 so the suite stays green."
+    },
+    {
+      "id": 3,
+      "name": "cleanup-late-emit-truncation",
+      "goal": "parseMultipartRelated cleans up correctly on every termination path (success, caller break, parser throw, dicer/source error), drains unyielded part bodies, removes attached listeners while keeping dicer's 'error' listener live for late-emit safety, detects mid-stream truncation, and routes the late-emit observation through the Logger contract — closing the resource-leak hygiene gap that the BRIEF flags as the most expensive bug in the reference impl.",
+      "userStories": ["US-007"],
+      "functionalRequirements": ["FR-010", "FR-011", "FR-022"],
+      "successCriteria": [
+        "Resource-Leak Hygiene Suite (test-plan.md §Resource-Leak Hygiene Suite) rows for the termination paths owned by Layer A pass: T-027 (success), T-015 (caller break), T-008 (parser throw — exercised via the internal harness used in Sprint 2), T-068 (source 'error'), T-044 (per-path listener-count snapshots pre/post finally). Listener-count assertions: dicer.listenerCount('part') === 0 AND dicer.listenerCount('error') >= 1 AND source.destroyed === true AFTER finally on every path.",
+        "T-016 passes: after the iterator's finally has run, manually emitting 'error' on the retained dicer instance does NOT raise an uncaughtException; instead the configured logger is called once with `{ level: 'warn', msg: /late parser error after generator close/, meta: { errSummary: { name, message } } }` — meta carries `errSummary` only, no raw chunk bytes, no full Error object (NFR-DR-S-008's contract for the late-emit path; the broader meta-sanitization gate lands in Sprint 7).",
+        "T-037 passes: an in-process http server that writes a 2-part envelope and cuts the connection BEFORE the closing `--boundary--` causes the iterator to reject with `MultipartTruncatedError` whose `bytesReceived` matches what was sent; cleanup per FR-010 still runs (listener-count assertions hold). T-066 passes: partial part header followed by socket close yields either MultipartTruncatedError or a dicer parse error, with cleanup intact either way.",
+        "Drain-on-finally proven: T-014 / T-015 setup with 5 unyielded parts after a `break` results in every unyielded `StreamingMultipartPart.body` having `.destroyed === true` after the iterator's finally — no leaked part Readables (the silent leak documented in BRIEF/architecture.md §5.3).",
+        "pnpm check exits 0; the three FR-017 silent-catch replacement sites in parse-multipart-related.ts (the unpipe site at architecture.md §7) route through the configured logger (T-031 / T-032 / T-033 partial — onProgress site already covered in Sprint 2's Layer A onProgress catch); zero silent catches surface in src/parse-multipart-related.ts (T-043). Branch coverage on src/parse-multipart-related.ts ≥ 90% (NFR-007)."
+      ],
+      "relevantSpecDocs": [
+        "spec.md",
+        "api.md",
+        "architecture.md",
+        "test-plan.md"
+      ],
+      "technicalNotes": "The single most expensive bug surface in the library. Implement the iterator's finally block to: (1) remove the 'data' listener attached to source, (2) src.unpipe(dicer) in a logged catch (FR-017 site), (3) src.destroy() if not already destroyed, (4) walk queue.pending and call .body.destroy() on every StreamingMultipartPart — the silent leak BRIEF calls out, (5) remove dicer 'part' and 'finish' listeners, (6) DELIBERATELY keep dicer's 'error' listener — this listener's handler is what calls logger({ level: 'warn', msg: 'multipart: late parser error after generator close', meta: { errSummary: summarizeError(err) } }). The summarizeError helper produces { name, message } with message run through formatErrorEmbed (truncate-to-120 + control-char redact); the full helper goes into src/internal/format-error-embed.ts in Sprint 7, but a minimal version (truncate, no ANSI handling) ships now so meta is well-shaped for T-016. Truncation detection: when source emits 'end' but dicer 'finish' has NOT yet fired, push MultipartTruncatedError into the queue before END. Cleanup is idempotent (guard a `cleaned = false` flag) — first-fire-wins. NFR-006 'battle-tested' is largely encashed here."
+    },
+    {
+      "id": 4,
+      "name": "timeouts-abort-validation",
+      "goal": "Idle and total timeouts plus AbortSignal propagation work end-to-end on parseMultipartRelated (and therefore become available to fetchAndHandleMultipart in Sprint 5). Both timeouts are REQUIRED on every entry point (no defaults) — slow-loris is closed at the type system. Idle resets per-chunk in Layer A, NOT via onProgress. validatePositiveTimeout enforces the [1, 2^31-1] integer range with a clear error message about Node setTimeout clamping.",
+      "userStories": ["US-003", "US-004", "US-005"],
+      "functionalRequirements": [
+        "FR-006",
+        "FR-007",
+        "FR-008",
+        "FR-009",
+        "FR-DR-A-025",
+        "FR-DR-A-026"
+      ],
+      "successCriteria": [
+        "Required-timeout enforcement: T-026 (fetchAndHandleMultipart missing idleTimeoutMs/totalTimeoutMs → sync TypeError) AND T-026b (parseMultipartRelated missing timeouts on BOTH overloads — Response + Readable+boundary — first .next() rejects with sync TypeError mentioning each missing timeout name; cross-product of supplying just one of the two also rejects) both pass. The error message MUST mention Node setTimeout's 2^31-1 clamping behavior (NFR-DR-S-009 — the actual >2^31-1 reject test lands in Sprint 7's T-079, but the message text ships now).",
+        "Idle timeout: T-009 (idleTimeoutMs:5000, server stalls 6s → MultipartIdleTimeoutError whose `idleTimeoutMs === 5000`, source.destroyed). T-010 (1B every 4s for 30s with idleTimeoutMs:5000 → success — proves per-chunk reset). T-073 (Layer-A direct test with NO onProgress supplied — slow chunks succeed because idle reset rides the 'data' listener, NOT onProgress; spy on internal timers.resetIdle proves it fires per source chunk, NOT per yielded part — FR-DR-A-025).",
+        "Total timeout: T-011 passes (totalTimeoutMs:60_000 with bytes still arriving → MultipartTotalTimeoutError whose `totalTimeoutMs === 60000`). Driven by `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })` + advanceTimersByTimeAsync.",
+        "Abort: T-012 (mid-stream controller.abort() → MultipartAbortError, source destroyed, in-flight part body emits no further 'data'). T-013 (already-aborted signal at call time → sync MultipartAbortError; spy proves fetch is never called — relevant once Sprint 5 lands fetchAndHandleMultipart, but the parseMultipartRelated-side already-aborted check passes here). MultipartAbortError.reason carries the caller-supplied reason verbatim or undefined; the library NEVER synthesizes a server-derived reason (F-S-006 contract).",
+        "Validation table T-060..T-065 passes: idleTimeoutMs and totalTimeoutMs of 0, NaN, Infinity, -1, 1.5 each throw TypeError synchronously with `must be a positive finite integer` in the message. Race test T-046 passes: concurrent abort + idle-timer fire → first-fire-wins, cleanup is idempotent (no double-destroy, listener counts stable). pnpm check exits 0; branch coverage on src/internal/timers.ts and src/internal/validate-timeout.ts ≥ 90%."
+      ],
+      "relevantSpecDocs": [
+        "spec.md",
+        "data-model.md",
+        "api.md",
+        "architecture.md",
+        "test-plan.md",
+        "review-architect.md"
+      ],
+      "technicalNotes": "Build src/internal/validate-timeout.ts (validatePositiveTimeout — enforces [1, 2^31-1] integer; the upper-bound test lands in Sprint 7 but the bound is enforced here so callers get correct behavior immediately). Build src/internal/timers.ts (TimerState: composite AbortSignal aggregating idle + total + caller signal; `resetIdle()` callable; `cleanup()` cancels both timers and detaches caller-signal listener; `abortInternally(reason)` for parser-throw / source-error race-safe abort). Wire into parseMultipartRelated: (1) call validatePositiveTimeout on both timeouts at the very top, (2) construct TimerState before pipe(), (3) the per-chunk source 'data' listener calls timers.resetIdle() — this is the SOLE idle-reset path (FR-DR-A-025/026), (4) when timers.signal aborts, look at why and push the right error class into the queue (idle/total/abort discriminator), (5) ensure cleanup() runs in the iterator's finally idempotently (Sprint 3's `cleaned` flag extends to also call timers.cleanup()). MultipartAbortError contract: reason is the caller-supplied signal.reason verbatim, or undefined when the signal had no reason; the library NEVER synthesizes a reason that embeds server-derived bytes (F-S-006). Once these wire up, every timeout/abort error class introduced in Sprint 1 finally has a real production code path."
+    },
+    {
+      "id": 5,
+      "name": "fetch-orchestration",
+      "goal": "fetchAndHandleMultipart works end-to-end: wraps fetch, validates response Content-Type (FR-021 case-insensitive, fail-fast before dicer is constructed), forbids fetchInit.signal (FR-024), forwards the timeouts/signal/onProgress/caps DOWN to parseMultipartRelated (FR-DR-A-026 — Layer A owns timers), drives the per-part parser, and resolves with the FR-DR-A-029 result shape `{ parts, bytes, elapsedMs, status, headers }` (NO `response` field — the previously-considered footgun is removed at the type level).",
+      "userStories": ["US-002", "US-005", "US-006", "US-009"],
+      "functionalRequirements": [
+        "FR-005",
+        "FR-021",
+        "FR-024",
+        "FR-DR-A-029"
+      ],
+      "successCriteria": [
+        "End-to-end orchestration: T-006 (3-part envelope, parser keeps only Content-ID:<meta> part → result.parts.length === 1 with the parsed value; other 2 part bodies were drained — listener-leak harness clean), T-007 (parser always returns undefined → result.parts.length === 0, result.bytes === envelope.length), T-008 (parser throws on part 2 → outer await rejects with the parser's error; full FR-010 cleanup runs).",
+        "Result shape: T-074 / T-005 expanded — `Object.keys(result).sort()` equals `['bytes','elapsedMs','headers','parts','status']`; `'response' in result === false` (FR-DR-A-029); `result.headers instanceof Headers === true`; `result.status` matches the underlying fetch response status; `result.bytes > 0`; `result.elapsedMs > 0`. Fields are readonly at the type level.",
+        "Content-Type validation: T-035 (server returns Content-Type: application/json → reject with `Error /multipart: response Content-Type is not multipart\\/related; got application\\/json/`; Dicer instance count from harness === 0 — proving fail-fast BEFORE dicer construction). T-036 (case-insensitive: server returns `Multipart/Related; boundary=foo` → success). T-067 (404 with multipart-shaped body → still rejects per FR-021).",
+        "fetchInit.signal forbidden (FR-024): T-069 — calling fetchAndHandleMultipart with `{ fetchInit: { signal: ctrl.signal }, idleTimeoutMs, totalTimeoutMs, parser }` throws synchronously `Error /fetchInit.signal is reserved/`; the type-level `Omit<RequestInit, 'signal'>` on MultipartHandlerOptions.fetchInit also surfaces this at compile time. Mirror with both options.signal AND fetchInit.signal set → same throw.",
+        "onProgress completion-tick (T-014 full): fires at least once per yielded part PLUS once at completion (the wallclock-owning layer for elapsedMs/bytes is fetchAndHandleMultipart per architecture §3). Logger contract proven end-to-end: T-019 (event-style fn), T-020 (default console.warn(msg, meta) when omitted), T-031..T-033 (the three FR-017 silent-catch replacement sites — onSourceBytes throw, src.unpipe throw, onProgress throw — each routes through logger.warn and parsing continues). pnpm check exits 0; branch coverage on src/fetch-and-handle-multipart.ts ≥ 90% (NFR-007)."
+      ],
+      "relevantSpecDocs": [
+        "spec.md",
+        "data-model.md",
+        "api.md",
+        "architecture.md",
+        "test-plan.md",
+        "review-architect.md"
+      ],
+      "technicalNotes": "Builds Layer B (src/fetch-and-handle-multipart.ts). Validation order at the top: (1) parser presence, (2) validatePositiveTimeout on both timeouts (already centralized in Sprint 4's Layer C — DO NOT duplicate), (3) reject if fetchInit?.signal is present (FR-024 — runtime check; the type-level `Omit<RequestInit,'signal'>` handles the static side), (4) sync MultipartAbortError if options.signal?.aborted at call time. Then: fetch(url, { ...options.fetchInit, signal: options.signal }) — caller signal forwarded raw; timers live in Layer A per FR-DR-A-026, so DO NOT construct a TimerState here. Capture status + headers from the Response BEFORE consuming body (FR-DR-A-029 — needed because the Response is gone after iteration). Content-Type assertion: lowercase + startsWith('multipart/related') BEFORE the dicer construction inside parseMultipartRelated; embed the offending Content-Type via formatErrorEmbed (Sprint 7 has the full helper; the Sprint-3 truncation-only stub is OK here — Sprint 7 backfills the ANSI/JSON.stringify behavior and T-077). Drive `for await (const part of parseMultipartRelated(res, { idleTimeoutMs, totalTimeoutMs, signal, onProgress, logger, ...caps }))`; await opts.parser(part); push non-undefined returns into parts. Wallclock: capture start time at fn entry; final onProgress emits with bytes + elapsedMs + rateBps after the loop ends; resolve { parts, bytes, elapsedMs, status, headers }."
+    },
+    {
+      "id": 6,
+      "name": "resource-caps",
+      "goal": "All four resource caps are enforced with their dedicated error classes: maxPartBytes per-part (NFR-DR-S-001), maxParts envelope-level (NFR-DR-S-012, default 10_000), maxHeadersPerPart count + maxHeaderBytesPerPart bytes (NFR-DR-S-004, defaults 100/16KiB), and the streamToString/streamToBuffer maxBytes cap (NFR-DR-S-002). Every cap overflow rejects with the right typed error and runs full FR-010 cleanup (listener-leak harness clean).",
+      "userStories": ["US-008"],
+      "functionalRequirements": [],
+      "successCriteria": [
+        "maxPartBytes (NFR-DR-S-001): T-075 — feed a 10 KiB part body with maxPartBytes:4096 → iterator rejects with `MultipartPartTooLargeError` whose `maxPartBytes === 4096`, `partIndex === 0`, `bytesReceived >= 4096`; offending part body destroyed; full FR-010 cleanup runs; listener-leak harness clean.",
+        "maxParts (NFR-DR-S-012): T-081 — 50-part envelope with maxParts:10 → reject with `MultipartTooManyPartsError { maxParts: 10, observed: 11 }`; source destroyed; harness clean. T-081b: omit maxParts → default 10_000 enforced; programmatically generated 10_001-part envelope rejects with `observed: 10_001`.",
+        "maxHeadersPerPart (count) and maxHeaderBytesPerPart (bytes): T-076 — (a) part with 200 headers + maxHeadersPerPart:100 → `MultipartHeadersTooLargeError { limit: 'count', cap: 100, observed: > 100 }`; (b) part with 32 KiB header value + maxHeaderBytesPerPart:16_384 → `MultipartHeadersTooLargeError { limit: 'bytes', cap: 16384, observed: > 16384 }`; both: source destroyed, harness clean.",
+        "streamToString / streamToBuffer maxBytes (NFR-DR-S-002): T-017b (streamToString with maxBytes:5 against 100-byte source → reject `Error /exceeded maxBytes/`; readable.destroyed === true), T-018b (streamToBuffer with maxBytes:3 against 6-byte source → same reject + destroy). Both helpers' signatures gain the optional `options.maxBytes` field at the type level (api.md §3 and §4).",
+        "Forwarding from Layer B → Layer A is correct: setting maxPartBytes / maxParts / maxHeadersPerPart / maxHeaderBytesPerPart on MultipartHandlerOptions reaches parseMultipartRelated unchanged (assert via integration test that mixes a fetchAndHandleMultipart call with each cap and gets the same typed reject as the direct parseMultipartRelated equivalent). pnpm check exits 0; branch coverage on the new cap-enforcement code in src/parse-multipart-related.ts and src/stream-helpers.ts ≥ 90% (NFR-007)."
+      ],
+      "relevantSpecDocs": [
+        "spec.md",
+        "data-model.md",
+        "api.md",
+        "test-plan.md",
+        "review-security.md"
+      ],
+      "technicalNotes": "All four caps are NFR-driven (NFR-DR-S-001/002/004/012) — there are no FRs in this sprint's allocation. The error classes themselves shipped in Sprint 1; this sprint wires the production code paths that throw them. In parseMultipartRelated: (a) maxPartBytes — wrap each per-part Readable in a counting transformer that destroys the part body and pushes MultipartPartTooLargeError into the queue once accumulated bytes > cap; (b) maxParts — increment a counter on every dicer 'part' event; when count > cap, push MultipartTooManyPartsError; (c) maxHeadersPerPart / maxHeaderBytesPerPart — observe dicer's 'header' event for the count + sum byte length of name+value+framing; trip on overflow. In stream-helpers.ts, the maxBytes accumulator option destroys the source on overflow. All four overflow paths share the existing FR-010 cleanup and the existing TimerState abort plumbing — the cap error becomes the cause via abortInternally(error). Defaults table: maxParts default 10_000, maxHeadersPerPart default 100, maxHeaderBytesPerPart default 16_384, maxPartBytes undefined (no cap unless caller asks). Coverage map rows for these tests exist in test-plan.md; this sprint just makes them green."
+    },
+    {
+      "id": 7,
+      "name": "hardening-info-leak-defense",
+      "goal": "Closing the security/info-leak holes that the domain review surfaced: sanitizeFileName Windows-reserved + dot-only fallback (NFR-DR-S-005), formatErrorEmbed full implementation (NFR-DR-S-006 — truncate, control-char redact, ANSI redact, JSON.stringify), validatePositiveTimeout 2^31-1 upper bound (NFR-DR-S-009), Logger meta sanitization gate (NFR-DR-S-008 — no raw chunk bytes, only errSummary), and the ReDoS-resistance perf gate on extractBoundary (NFR-DR-S-011). Plus the path-traversal sanitizeFileName basics (FR-023) get their final test pass.",
+      "userStories": [],
+      "functionalRequirements": ["FR-023"],
+      "successCriteria": [
+        "sanitizeFileName: T-038 (path-traversal `../etc/passwd` → `_._etc_passwd`; embedded \\x00\\x07 stripped; `.hidden` → `hidden`; 'a'.repeat(300) capped at 255; spaces → `_` — FR-023). T-038b: Windows reserved-name table (`'CON'`, `'con'`, `'AUX'`, `'aux.txt'`, `'COM1'`, `'com9.dat'`, `'LPT1'`, `'lpt9.foo'`, `'PRN'`, `'NUL'`) ALL → `'_'`; non-reserved (`'CONsole'`, `'auxiliary'`) NOT mapped (NFR-DR-S-005). T-038c: pure-dot inputs (`'.'`, `'..'`, `'...'`) and inputs that empty after pipeline → `'_'`. Assert NEVER returns `''`.",
+        "formatErrorEmbed (NFR-DR-S-006): T-077 — direct unit on the helper — (a) 5 KB ASCII input truncated to 120 chars + `…` suffix; (b) input with \\x00, \\x07, `\\x1B[31m` (ANSI red) → all replaced with the literal token `[redacted-control]`; (c) input with embedded `\"` → JSON.stringify'd output preserves quotes visibly. Companion integration row: trigger FR-021 reject path with a Content-Type carrying CRLF + 5 KB garbage → thrown error message length <= ~250 chars and contains zero raw 0x00–0x1F bytes (the Sprint-3 stub is replaced).",
+        "Logger meta sanitization (NFR-DR-S-008): T-078 — trigger T-016's late-emit path with a dicer error whose `.message` is 500 chars + control bytes; assert mockLogger event arg's `meta.errSummary.message.length <= 120` and contains no \\x00–\\x1F bytes; meta does NOT contain a `chunk` / `bytes` / raw Error field. summarizeError helper reused at every logger call site — i.e., the three FR-017 sites (T-031..T-033) all funnel through it.",
+        "validatePositiveTimeout 2^31-1 (NFR-DR-S-009): T-079 — `2_147_483_647` PASSES (boundary inclusive); `2_147_483_648`, `2**31`, `Number.MAX_SAFE_INTEGER` ALL throw TypeError whose message mentions Node setTimeout clamping. Companion: parseMultipartRelated(res, { idleTimeoutMs: 2**31, totalTimeoutMs: 5000 }) first .next() rejects synchronously.",
+        "ReDoS resistance (NFR-DR-S-011): T-080 — `pathological = 'multipart/related; boundary=\"' + '\\\\\\\"'.repeat(32_000) + '\"'` (~64 KiB) — extractBoundary called 10× in a loop with `performance.now()` timing → mean wall time < 50 ms. Static gate (T-039 + T-043) re-asserted for the wider codebase: zero `any` / `as never` / `as any`; zero silent catches. NFR-DR-S-006/008 pull the entire src/ surface to clean by this sprint's end. pnpm check exits 0."
+      ],
+      "relevantSpecDocs": [
+        "spec.md",
+        "data-model.md",
+        "test-plan.md",
+        "review-security.md"
+      ],
+      "technicalNotes": "Backfills the security-domain-review gaps that were left as stubs in earlier sprints. (1) sanitize-filename.ts: existing FR-023 pipeline (strip path separators / control chars / leading dots / non-`[A-Za-z0-9._-]` → `_` / cap 255) gains a post-pipeline check — empty result, single/double dot, or case-insensitive Windows-reserved name (CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9], with or without extension) → return `'_'` literal. The Windows-reserved check applies AFTER the leading-dot strip and AFTER the char-class replace, BEFORE the 255 cap. (2) format-error-embed.ts: full implementation — truncate-to-120 with `…` suffix, replace control chars (0x00–0x1F + 0x7F) AND CSI/ANSI escape sequences with `[redacted-control]`, JSON.stringify the result. summarizeError(err) = { name: err.name, message: formatErrorEmbed(err.message) } — used at every logger.warn meta site. Replace any earlier truncation-only stub of formatErrorEmbed wired in Sprints 3+5. (3) validatePositiveTimeout: add the > 2_147_483_647 reject branch with the Node-setTimeout-clamping message text; the message text was already mandated in Sprint 4 — this sprint adds the actual numeric bound check + T-079. (4) extractBoundary: if the Sprint-1 implementation was already a non-backtracking tokenizer (it should be — NFR-DR-S-011 was a Sprint-1 floor), T-080 is a passing assertion; if the Sprint-1 implementation accidentally used a vulnerable regex, this sprint rewrites it as a hand-written tokenizer."
+    },
+    {
+      "id": 8,
+      "name": "publish-polish",
+      "goal": "First-publish-ready: README expanded with a real runnable Quickstart + Error handling + Compatibility content, package shape audited via attw, CJS/ESM dicer interop proven via spawned-child consumer tests, dual-emit instanceof verified, memory-bound test green, and the pack manifest gate plus the JSDoc-completeness gate plus the dicer-shim isolation gate all clean.",
+      "userStories": ["US-010"],
+      "functionalRequirements": [],
+      "successCriteria": [
+        "Pack manifest (NFR-008): pnpm pack --dry-run --json output enumerates exactly { dist/, README.md, LICENSE, package.json } — T-048 final assertion. Dicer-shim isolation: T-071 — `dist/index.d.ts` does NOT contain `from 'dicer'` and does NOT contain `import.*dicer`; src/internal/dicer.d.ts is well-formed standalone (parses without @types/dicer present anywhere in the dependency tree).",
+        "attw gate (NFR-DR-D-015): `pnpm dlx @arethetypeswrong/cli --pack` exits 0 with no errors across all four resolution scenarios (node10, node16-cjs, node16-esm, bundler). package.json#exports['.'] resolves correctly to dist/index.js / dist/index.cjs / dist/index.d.ts under each.",
+        "Cross-format consumer tests: T-052 — spawned child Node process #1 does `require('./dist/index.cjs')` and exercises a multipart parse; child #2 does dynamic `import('./dist/index.js')` and exercises the same parse; both succeed without `TypeError /Dicer is not a constructor/` (FR-DR-A-028 normalization proven in real consumers). T-072 same shape for dicer interop. T-082 integration: spawned ESM child throws MultipartIdleTimeoutError; CJS parent imports from dist/index.cjs and asserts `err.name === 'MultipartIdleTimeoutError'` even if cross-bundle instanceof returns false (NFR-DR-D-007 documented fallback).",
+        "README final pass (NFR-DR-D-002): Quickstart section now contains the full runnable fetchAndHandleMultipart example (parseMultipartRelated stub from Sprint 1 is replaced); API section lists every public symbol with a one-line description + link to the JSDoc; Error handling section enumerates the 7 error classes and documents the cross-format `err.name` fallback; Compatibility section lists Node >=20.18.0 and dual ESM+CJS support. T-050 grep pass. JSDoc completeness gate T-034 final pass: all public symbols have @param/@returns/@throws/@example as applicable (FR-020).",
+        "Memory-bound test (NFR-011): T-051 — feed a 100 MB envelope (10×10MB parts) through fetchAndHandleMultipart with a parser that drains via streaming (no streamToBuffer); peak `process.memoryUsage().heapUsed` stays < 50 MB above baseline. Concurrency contract T-083: concurrent iter.next() calls do not crash the process (no uncaughtException fires). pnpm check exits 0; vitest --coverage shows ≥ 90% branches on src/** (NFR-007). pnpm pack --dry-run final smoke clean."
+      ],
+      "relevantSpecDocs": [
+        "spec.md",
+        "api.md",
+        "architecture.md",
+        "test-plan.md",
+        "review-domain.md"
+      ],
+      "technicalNotes": "All NFR-driven (no FRs allocated — these are publish-config + integration gates). attw gate may need a devDependency add and a `pnpm publish:check` script that runs attw + pnpm pack --dry-run + a node-spawn cross-format harness sequentially. The cross-format consumer tests live in tests/integration/cross-format.test.ts and use child_process.spawn to invoke a real Node process against the built dist/ — this is one of the few places the test suite exits the vitest sandbox. README updates: replace the Sprint-1 placeholder Quickstart with a fetchAndHandleMultipart example mirroring api.md §2; add a Security note section pointing at the cap defaults (maxParts:10_000, maxHeadersPerPart:100, maxHeaderBytesPerPart:16_384) per the NFR-DR-S-001/004/012 readme guidance; document the F-S-006 abort-reason contract in passing. CHANGELOG.md is OUT OF SCOPE per spec.md OoS list (F-D-005 deferred); SECURITY.md likewise (F-D-014 deferred). After this sprint passes, the package is ready for `pnpm publish` — that step itself is operator-driven, not a sprint task."
+    }
+  ]
+}

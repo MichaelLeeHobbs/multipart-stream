@@ -1,0 +1,119 @@
+{
+  "sprintId": 1,
+  "status": "complete",
+  "standardsHash": "20cfb545a20814a0e711722c0606e1bc0d5631855f175e89bdbe06aa5be2c9cf",
+  "implemented": [
+    "FR-016 / NFR-DR-S-011: src/extract-boundary.ts — hand-written non-backtracking RFC 2046 tokenizer (T-080 perf gate green at <50ms on 64KiB pathological input)",
+    "FR-019 / NFR-DR-S-001 / NFR-DR-S-004 / NFR-DR-S-012 / NFR-DR-D-007: src/errors.ts — all 7 error classes with stable name property, structured fields, and cause plumbing",
+    "FR-015: src/stream-helpers.ts — streamToString + streamToBuffer (no maxBytes — Sprint 6 adds NFR-DR-S-002)",
+    "src/types.ts — every public type alias (StreamingMultipartPart, PartParser, MultipartFetchResult, ParseMultipartOptions, MultipartHandlerOptions, ProgressSnapshot, Logger) with NFR-DR-A-013 field?:T|undefined ergonomics",
+    "FR-018 / JC-2: src/internal/default-logger.ts — event-style Logger fallback that re-shapes to console.warn(msg, meta) positional",
+    "FR-DR-A-027: src/internal/dicer.d.ts — hand-written ambient shim (Dicer ctor, part/finish/error/header events, DicerPartStream + DicerHeaderBag); no @types/dicer",
+    "FR-DR-A-028: src/parse-multipart-related.ts stub uses typed dicerMod.default ?? dicerMod normalization (no `as any`)",
+    "src/parse-multipart-related.ts — Sprint 1 stub: throws 'not yet implemented (Sprint 2)' (Sprint 2 fills in body)",
+    "src/fetch-and-handle-multipart.ts — Sprint 1 stub: rejects with 'not yet implemented (Sprint 5)' (Sprint 5 fills in body)",
+    "src/index.ts — exact public re-exports per spec/api.md §Module entry",
+    "FR-DR-D-001: LICENSE — MIT text with 'Copyright (c) 2026 Michael Hobbs <michael.lee.hobbs@gmail.com>'",
+    "FR-DR-D-004: package.json#repository.url + bugs.url + homepage — non-empty git+https URLs (placeholder mhobbs/multipart-stream)",
+    "NFR-DR-A-014: package.json#engines.node === '>=20.18.0' (T-041)",
+    "NFR-004: dependencies.dicer === '0.3.1' exact pin via pnpm add --save-exact (T-042)",
+    "NFR-DR-D-010: tsconfig.base.json verbatimModuleSyntax: true",
+    "FR-020: full JSDoc with @param/@returns/@throws/@example on every public symbol",
+    "NFR-DR-D-002: README.md with all 6 mandatory H2 sections (Install, Quickstart, API, Error handling, Compatibility, License); err.name cross-format fallback documented",
+    "tests/unit/extract-boundary.test.ts — 13 tests covering happy paths, error paths, T-080 ReDoS perf gate",
+    "tests/unit/errors.test.ts — 22 tests covering all 7 classes, instanceof, name, cause, structured fields (T-021/T-082)",
+    "tests/unit/stream-helpers.test.ts — 9 tests covering streamToString/streamToBuffer happy + error + zero-byte paths (T-017/T-018/T-028)",
+    "tests/unit/types.test.ts — 5 expectTypeOf assertions: spread-merge ergonomics under exactOptionalPropertyTypes (T-070); Logger event-style signature (T-019 type test)",
+    "tests/integration/sprint-1-stubs.test.ts — 4 stub-marker tests Sprint 2/5 will replace with real coverage",
+    "tests/build-smoke.test.ts — 2 dist-shape tests (T-040 file existence + T-071 no dicer leak in d.ts)",
+    "Dual-emit dist verified: dist/index.js + dist/index.cjs + dist/index.d.ts + dist/index.d.cts all built; ESM and CJS export surfaces both load all 12 names; T-071 grep on dist/index.d.ts returns zero hits for `from 'dicer'`",
+    "pnpm pack --json output enumerates exactly { dist/, LICENSE, package.json, README.md } — no source/tests/tsconfig leak (T-048)",
+    "ESLint resolver upgraded to flat-config-friendly createTypeScriptImportResolver from eslint-import-resolver-typescript@3.10.1 (was: broken `import/resolver: typescript` legacy form)"
+  ],
+  "filesChanged": [
+    "package.json (engines, deps, repository, bugs, homepage, keywords, devDeps)",
+    "tsconfig.base.json (verbatimModuleSyntax)",
+    "eslint.config.mjs (flat-config resolver, per-file overrides)",
+    "LICENSE (new)",
+    "README.md (new)",
+    "src/index.ts (replaced placeholder with public re-exports)",
+    "src/types.ts (new)",
+    "src/errors.ts (new)",
+    "src/extract-boundary.ts (new)",
+    "src/stream-helpers.ts (new)",
+    "src/parse-multipart-related.ts (new — Sprint 2 stub)",
+    "src/fetch-and-handle-multipart.ts (new — Sprint 5 stub)",
+    "src/internal/dicer.d.ts (new — FR-DR-A-027 ambient shim)",
+    "src/internal/default-logger.ts (new — FR-018 fallback)",
+    "tests/unit/extract-boundary.test.ts (new)",
+    "tests/unit/errors.test.ts (new)",
+    "tests/unit/stream-helpers.test.ts (new)",
+    "tests/unit/types.test.ts (new)",
+    "tests/integration/sprint-1-stubs.test.ts (new)",
+    "tests/build-smoke.test.ts (new)",
+    "tests/index.test.ts (deleted — was placeholder smoke test)",
+    "sprints/sprint-1-report.json (new)"
+  ],
+  "knownIssues": [
+    "parseMultipartRelated body is a 'not yet implemented (Sprint 2)' throw — Sprint 2 implements queue+notifier bridge, dicer wiring, listener pre-pipe attachment, and yield loop",
+    "fetchAndHandleMultipart body is a 'not yet implemented (Sprint 5)' rejection — Sprint 5 implements fetch + Content-Type validation + parser-driven for-await loop",
+    "formatErrorEmbed is a truncate-only stub in extract-boundary.ts (truncate-to-120 + ellipsis); Sprint 7 backfills control-char redact + ANSI redact + JSON.stringify per NFR-DR-S-006",
+    "streamToString/streamToBuffer have NO maxBytes cap yet — Sprint 6 adds NFR-DR-S-002 + T-017b/T-018b assertions",
+    "Internal helpers from data-model.md §2 (flatten-headers, sanitize-filename, derive-name, queue-notifier, timers, normalize-input, validate-timeout, format-error-embed) NOT yet implemented — they ship in Sprints 2-7 per the planner queue",
+    "tests/build-smoke.test.ts auto-skips when dist/ is absent — operators running `pnpm test` without a prior `pnpm build` will see 2 skipped tests; CI gates skip them via process.env.CI === 'true'",
+    "tests/unit/types.test.ts is a runtime-loaded vitest file using expectTypeOf (vs a true tsd-style .test-d.ts file); the static guarantees still come from `pnpm typecheck` over the file"
+  ],
+  "assumptions": [
+    {
+      "context": "Spec calls for repository.url and bugs.url to be non-empty before first publish but does not pin the GitHub org/name",
+      "choice": "Used 'mhobbs/multipart-stream' as the placeholder URL across repository.url, bugs.url, homepage",
+      "alternatives_considered": ["ubercode/multipart-stream (matches scope)", "leave empty (rejected — FR-DR-D-004 violation)"]
+    },
+    {
+      "context": "Sprint 1 success criteria reference T-080 (ReDoS perf gate) which spec assigns to Sprint 7 but planner notes 'write extractBoundary correctly the first time so the perf gate is a no-op assertion'",
+      "choice": "Wrote the perf gate assertion in extract-boundary.test.ts now (mean <50ms on 64KiB pathological input). The Sprint 1 implementation is a hand-written single-pass tokenizer; Sprint 7 will reassert without rewriting",
+      "alternatives_considered": ["Defer assertion to Sprint 7 (rejected — planner explicitly says ReDoS-resistance is a Sprint 1 floor)"]
+    },
+    {
+      "context": "Sprint 1 plan calls for tests/unit/types.test-d.ts (tsd-style); vitest 2.x discovers .test.ts only by default",
+      "choice": "Renamed to tests/unit/types.test.ts; uses vitest's expectTypeOf which runtime-stubs the type-level checks. The static failures still surface during `pnpm typecheck`",
+      "alternatives_considered": ["Configure vitest typecheck mode (rejected — adds Sprint 1 toolchain risk)", "Keep .test-d.ts and add include glob (deferred — same outcome with more config)"]
+    },
+    {
+      "context": "ESLint flat config used the legacy `settings.import/resolver: { typescript: { project } }` form which fails under eslint-plugin-import 2.32 + flat config",
+      "choice": "Added eslint-import-resolver-typescript@^3.6.0 dev dep and switched to `settings.import/resolver-next: [createTypeScriptImportResolver({ project })]`",
+      "alternatives_considered": ["Drop import/no-cycle rule (rejected — value-add for cycle detection)", "Pin eslint-plugin-import to older version (rejected — kicks the can)"]
+    },
+    {
+      "context": "The Sprint 1 spec mentions 'formatErrorEmbed-stub-truncation for embedded <Content-Type> values' but does not pin the stub's full signature",
+      "choice": "Inlined a private truncateForErrorEmbed helper in src/extract-boundary.ts (120-char + ellipsis). Sprint 7 will replace this with src/internal/format-error-embed.ts and centralize across all embed sites",
+      "alternatives_considered": ["Create src/internal/format-error-embed.ts now with the truncate-only impl (deferred — Sprint 7 owns the file and full impl)"]
+    },
+    {
+      "context": "The Sprint 1 plan calls for `pnpm pack --dry-run` but pnpm 10 does not support --dry-run",
+      "choice": "Used `pnpm pack --json` to inspect the tarball file list, then deleted the tarball. CI gate in Sprint 8 (T-048) will use the same JSON output",
+      "alternatives_considered": ["npm pack --dry-run (rejected — operator standardizes on pnpm)"]
+    },
+    {
+      "context": "extractBoundary's hand-written tokenizer is intentionally a single function with state-machine shape (~100 lines, complexity 40) which trips eslint's max-lines-per-function and complexity rules",
+      "choice": "Added per-file overrides in eslint.config.mjs to disable max-lines-per-function/complexity/max-depth for src/extract-boundary.ts only. Reasoning is documented inline in the override block. NFR-DR-S-011's loop invariants depend on the single-function shape",
+      "alternatives_considered": ["Split into helper functions (rejected — obscures invariants and Sprint 7 perf gate validates the shape)", "Use a regex (rejected — NFR-DR-S-011 forbids backtracking regex)"]
+    },
+    {
+      "context": "tsup emits both dist/index.d.ts (ESM types) and dist/index.d.cts (CJS types). The Sprint 1 success criteria only mentions dist/index.d.ts",
+      "choice": "Both files exist and both are dicer-import-free (T-071 confirmed for both). pack-manifest test asserts both are shipped",
+      "alternatives_considered": ["Disable .d.cts emission (rejected — needed for FR-DR-A-029 attw gate in Sprint 8)"]
+    },
+    {
+      "context": "package.json#keywords spec list was 'multipart, multipart-related, multipart-parser, streaming, fetch, async-iterator, rfc-2046, node' (NFR-DR-D-013 deferred); generator prompt suggested 'multipart, multipart/related, streaming, fetch, async-iterator, node'",
+      "choice": "Used the generator prompt's shorter list. NFR-DR-D-013 is deferred per spec.md Out of Scope; first-publish operator can edit this freely",
+      "alternatives_considered": ["Use the spec's longer list (deferred per Out of Scope row)"]
+    },
+    {
+      "context": "Sprint 1 success criteria reference 'pnpm dlx @arethetypeswrong/cli --pack' (NFR-DR-D-015 attw gate)",
+      "choice": "Did NOT run attw this sprint — planner explicitly assigns it to Sprint 8 ('publish-polish'). Sprint 8 task adds it as a CI gate alongside T-052 cross-format consumer tests",
+      "alternatives_considered": ["Run attw as a Sprint 1 sanity check (deferred — adds toolchain dep that Sprint 8 manages)"]
+    }
+  ],
+  "runInstructions": "pnpm install; pnpm test"
+}
