@@ -24,6 +24,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,6 +38,11 @@ const distEsmAbs = path
 const distCjsAbs = path
   .join(repoRoot, 'dist', 'index.cjs')
   .replace(/\\/g, '/');
+
+// These tests exercise the BUILT dist/ bundle. If it's missing, skip with
+// a clear message rather than failing cryptically with MODULE_NOT_FOUND.
+// Run `pnpm build` first (or `pnpm run publish:check`).
+const distMissing = !existsSync(distEsmAbs) || !existsSync(distCjsAbs);
 
 async function runChild(
   scriptContent: string,
@@ -72,7 +78,7 @@ async function runChild(
   }
 }
 
-describe('cross-format consumer (T-052, T-072, T-082)', () => {
+describe.skipIf(distMissing)('cross-format consumer (T-052, T-072, T-082)', () => {
   // 30 s budget per spawn — Windows CI is slow to fork node.
   const SPAWN_TIMEOUT_MS = 30_000;
 
