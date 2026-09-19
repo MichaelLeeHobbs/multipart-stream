@@ -97,7 +97,7 @@ export default [
       'src/fetch-and-handle-multipart.ts',
     ],
     rules: {
-      // The Layer A async generator owns three concerns (dicer wiring,
+      // The Layer A async generator owns three concerns (parser wiring,
       // listener-attachment-before-pipe per FR-012, and the yield loop)
       // that planner.json #2 deliberately keeps together. Splitting into
       // helpers would require shared closure state across helper
@@ -128,6 +128,15 @@ export default [
       'max-lines-per-function': 'off',
       complexity: 'off',
       'max-depth': 'off',
+    },
+  },
+  {
+    files: ['src/internal/multipart-parser.ts'],
+    rules: {
+      'max-lines-per-function': 'off',
+      'max-params': 'off',
+      'max-depth': 'off',
+      complexity: 'off',
     },
   },
   {

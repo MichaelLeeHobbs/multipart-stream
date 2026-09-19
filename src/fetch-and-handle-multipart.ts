@@ -11,10 +11,10 @@
  *      forwards the caller's `AbortSignal` to fetch directly so a network-
  *      time abort cancels the request before any bytes flow.
  *   3. Validates the response Content-Type (FR-021) case-insensitively
- *      against `multipart/related` BEFORE constructing dicer. The offending
+ *      against `multipart/related` BEFORE constructing parser. The offending
  *      Content-Type is sanitized via `truncateForErrorEmbed` per
- *      NFR-DR-S-006. T-035 asserts the dicer-activity harness sees zero
- *      Dicer instances on this path.
+ *      NFR-DR-S-006. T-035 asserts the parser-activity harness sees zero
+ *      Parser instances on this path.
  *   4. Captures `status` + `headers` BEFORE consuming the body
  *      (FR-DR-A-029 — the Response is gone after iteration).
  *   5. Forwards `idleTimeoutMs` / `totalTimeoutMs` / `signal` / `onProgress`
@@ -83,11 +83,11 @@ import type {
  *   — T-013 spies on `globalThis.fetch` to verify.
  * @throws {Error} `multipart: response Content-Type is not multipart/related;
  *   got <actual>` when the response Content-Type doesn't start with
- *   `multipart/related` (case-insensitive) (FR-021). Dicer is NEVER
- *   constructed on this path — T-035 asserts via the dicer-activity
+ *   `multipart/related` (case-insensitive) (FR-021). Parser is NEVER
+ *   constructed on this path — T-035 asserts via the parser-activity
  *   harness.
  * @throws Any error from `parseMultipartRelated` (idle/total timeout,
- *   abort mid-stream, truncation, source error, dicer error, cap overflow).
+ *   abort mid-stream, truncation, source error, parser error, cap overflow).
  * @throws Any error from `options.parser`.
  *
  * @example
@@ -200,8 +200,8 @@ export async function fetchAndHandleMultipart<T>(
     throw err;
   }
 
-  // 6. FR-021 — Content-Type validation BEFORE dicer construction. The
-  //    test-harness asserts `dicer-activity.dicerInstances().length === 0`
+  // 6. FR-021 — Content-Type validation BEFORE parser construction. The
+  //    test-harness asserts `parser-activity.parserInstances().length === 0`
   //    on this path (T-035). Case-insensitive prefix check per FR-021;
   //    the offending value is run through `truncateForErrorEmbed` (the
   //    full sanitizer per NFR-DR-S-006).
@@ -248,9 +248,9 @@ export async function fetchAndHandleMultipart<T>(
     }
     // FR-014: when the parser returns undefined OR the parser returned a
     // value without touching part.body, the LIBRARY drains the body so
-    // dicer can advance its state machine to the next part. Without this,
+    // parser can advance its state machine to the next part. Without this,
     // a parser that always returns undefined hangs the multipart stream
-    // (dicer's per-part Readable buffers indefinitely; the closing
+    // (parser's per-part Readable buffers indefinitely; the closing
     // boundary never makes it through; the truncation detector
     // mis-fires). Draining is a no-op if the parser already drained.
     if (!part.body.destroyed && part.body.readable) {

@@ -22,11 +22,11 @@ import {
   parseMultipartRelated,
   streamToString,
 } from '../../src/index.js';
-import {
-  captureDicerActivity,
-  type DicerActivityTracker,
-} from '../fixtures/dicer-activity.js';
 import { buildMultipartBody } from '../fixtures/multipart-builders.js';
+import {
+  captureParserActivity,
+  type ParserActivityTracker,
+} from '../fixtures/parser-activity.js';
 
 const BOUNDARY = 'ABORT-BOUNDARY';
 
@@ -281,10 +281,10 @@ describe('parseMultipartRelated — F-S-006 reason contract', () => {
 });
 
 describe('parseMultipartRelated — T-046: race semantics (abort + idle on same tick)', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
   afterEach(() => {
     tracker.restore();
@@ -336,11 +336,11 @@ describe('parseMultipartRelated — T-046: race semantics (abort + idle on same 
     await settle();
     // Listener-leak harness assertions — same shape as parse-cleanup's suite.
     expect(source.destroyed).toBe(true);
-    for (const dicer of tracker.dicerInstances()) {
-      expect(dicer.listenerCount('part')).toBe(0);
-      expect(dicer.listenerCount('finish')).toBe(0);
+    for (const parser of tracker.parserInstances()) {
+      expect(parser.listenerCount('part')).toBe(0);
+      expect(parser.listenerCount('finish')).toBe(0);
       // FR-011 retention: the 'error' listener is intentionally kept.
-      expect(dicer.listenerCount('error')).toBeGreaterThanOrEqual(1);
+      expect(parser.listenerCount('error')).toBeGreaterThanOrEqual(1);
     }
     for (const part of tracker.partStreams()) {
       expect(part.destroyed).toBe(true);
@@ -349,9 +349,9 @@ describe('parseMultipartRelated — T-046: race semantics (abort + idle on same 
 });
 
 describe('parseMultipartRelated — abort cleanup symmetry', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
   afterEach(() => {
     tracker.restore();
@@ -380,10 +380,10 @@ describe('parseMultipartRelated — abort cleanup symmetry', () => {
 
     await settle();
     expect(source.destroyed).toBe(true);
-    for (const dicer of tracker.dicerInstances()) {
-      expect(dicer.listenerCount('part')).toBe(0);
-      expect(dicer.listenerCount('finish')).toBe(0);
-      expect(dicer.listenerCount('error')).toBeGreaterThanOrEqual(1);
+    for (const parser of tracker.parserInstances()) {
+      expect(parser.listenerCount('part')).toBe(0);
+      expect(parser.listenerCount('finish')).toBe(0);
+      expect(parser.listenerCount('error')).toBeGreaterThanOrEqual(1);
     }
     for (const part of tracker.partStreams()) {
       expect(part.destroyed).toBe(true);

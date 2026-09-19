@@ -1,15 +1,10 @@
 /**
- * Queue+notifier bridge between dicer's event-emitter shape and the async
+ * Queue+notifier bridge between parser's event-emitter shape and the async
  * generator returned by `parseMultipartRelated`.
  *
- * Per `kiln/spec/architecture.md` §3 and `kiln/spec/data-model.md` §2.1/§2.2: a
- * single-producer / single-consumer bounded async queue. Dicer's `'part'` /
- * `'finish'` / `'error'` event handlers `push` items synchronously; the
- * generator's main loop awaits `next()` until an item is enqueued.
- *
- * The simplest correct shape: an unbounded array + a single resolver pair.
- * Backpressure is not required (dicer is a `Writable` and handles its own
- * backpressure via the `pipe()` from the source `Readable`).
+ * Parser events enqueue parts, completion, or errors for the async generator.
+ * The parser's part streams provide body backpressure; this queue has one
+ * producer and one consumer.
  *
  * Items are tagged with a discriminated union so callers can distinguish
  * part-events from end-of-stream and error sentinels without ambiguity.
@@ -48,7 +43,7 @@ export interface QueueNotifier {
 
   /**
    * Convenience: push an `error` sentinel. The queue accepts multiple error
-   * pushes (e.g. dicer + source both fail) — the consumer drains the first
+   * pushes (e.g. parser + source both fail) — the consumer drains the first
    * one and the rest stay buffered for the cleanup path.
    */
   signalError(err: Error): void;
@@ -93,7 +88,7 @@ export function createQueueNotifier(): QueueNotifier {
     if (ended && item.type !== 'end' && item.type !== 'error') {
       // After an `end` has been delivered, only further error pushes are
       // permitted (cleanup may surface late errors). Drop part pushes
-      // silently — the dicer state machine has already declared the
+      // silently — the parser state machine has already declared the
       // stream finished.
       return;
     }

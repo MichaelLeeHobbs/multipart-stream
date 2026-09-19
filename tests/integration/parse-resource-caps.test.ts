@@ -10,9 +10,9 @@
  *  - T-081b: maxParts default 10_000 enforced when undefined
  *
  * Every test asserts the typed error AND the FR-010 cleanup invariants
- * (source destroyed; dicer.listenerCount('part') === 0;
- * dicer.listenerCount('error') >= 1; every captured part Readable is
- * destroyed) via the `dicer-activity` listener-leak harness.
+ * (source destroyed; parser.listenerCount('part') === 0;
+ * parser.listenerCount('error') >= 1; every captured part Readable is
+ * destroyed) via the `parser-activity` listener-leak harness.
  */
 
 import { Readable } from 'node:stream';
@@ -25,11 +25,11 @@ import {
   MultipartTooManyPartsError,
   parseMultipartRelated,
 } from '../../src/index.js';
-import {
-  captureDicerActivity,
-  type DicerActivityTracker,
-} from '../fixtures/dicer-activity.js';
 import { buildMultipartBody } from '../fixtures/multipart-builders.js';
+import {
+  captureParserActivity,
+  type ParserActivityTracker,
+} from '../fixtures/parser-activity.js';
 
 const BOUNDARY = 'CAPS-BOUNDARY-9f';
 const TIMEOUTS = { idleTimeoutMs: 5_000, totalTimeoutMs: 60_000 } as const;
@@ -43,20 +43,20 @@ async function settle(): Promise<void> {
 
 /**
  * Common cleanup-invariants check after a cap trip. Per the FR-010
- * Resource-Leak Hygiene Suite: source destroyed, dicer 'part' listeners
- * cleared, dicer 'error' listener retained, every captured part Readable
+ * Resource-Leak Hygiene Suite: source destroyed, parser 'part' listeners
+ * cleared, parser 'error' listener retained, every captured part Readable
  * destroyed.
  */
 function assertCleanupClean(
-  tracker: DicerActivityTracker,
+  tracker: ParserActivityTracker,
   source: Readable,
 ): void {
-  const dicers = tracker.dicerInstances();
-  expect(dicers.length).toBeGreaterThanOrEqual(1);
-  for (const dicer of dicers) {
-    expect(dicer.listenerCount('part')).toBe(0);
-    expect(dicer.listenerCount('finish')).toBe(0);
-    expect(dicer.listenerCount('error')).toBeGreaterThanOrEqual(1);
+  const parsers = tracker.parserInstances();
+  expect(parsers.length).toBeGreaterThanOrEqual(1);
+  for (const parser of parsers) {
+    expect(parser.listenerCount('part')).toBe(0);
+    expect(parser.listenerCount('finish')).toBe(0);
+    expect(parser.listenerCount('error')).toBeGreaterThanOrEqual(1);
   }
   expect(source.destroyed).toBe(true);
   for (const part of tracker.partStreams()) {
@@ -65,10 +65,10 @@ function assertCleanupClean(
 }
 
 describe('parseMultipartRelated — maxPartBytes (NFR-DR-S-001 / T-075)', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
 
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
 
   afterEach(() => {
@@ -95,7 +95,7 @@ describe('parseMultipartRelated — maxPartBytes (NFR-DR-S-001 / T-075)', () => 
         boundary: BOUNDARY,
         maxPartBytes: 4096,
       })) {
-        // Drain the body — drives dicer's pump so the cap can trip on
+        // Drain the body — drives parser's pump so the cap can trip on
         // the per-part 'data' counter.
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         for await (const _chunk of part.body) {
@@ -194,10 +194,10 @@ describe('parseMultipartRelated — maxPartBytes (NFR-DR-S-001 / T-075)', () => 
 });
 
 describe('parseMultipartRelated — maxParts (NFR-DR-S-012 / T-081)', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
 
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
 
   afterEach(() => {
@@ -309,10 +309,10 @@ describe('parseMultipartRelated — maxParts (NFR-DR-S-012 / T-081)', () => {
 });
 
 describe('parseMultipartRelated — maxHeadersPerPart + maxHeaderBytesPerPart (NFR-DR-S-004 / T-076)', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
 
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
 
   afterEach(() => {

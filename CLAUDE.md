@@ -29,7 +29,7 @@ multipart-stream/
 - **Build:** `tsup` (dual ESM/CJS bundle + `.d.ts`)
 - **Test:** `vitest`
 - **Lint/format:** `eslint` 9 flat config + `prettier` 3
-- **Dependency:** `dicer@0.3.1` (underlying multipart-MIME parser; keep — fork-and-absorb if it ever breaks)
+- **Dependency:** `streamsearch@1.1.0` for boundary matching; the multipart parser is private TypeScript in `src/internal/multipart-parser.ts`.
 - **Pkg manager:** pnpm 10
 - **Module shape:** dual ESM + CJS, `.d.ts`, `sideEffects: false`, single entry `src/index.ts`
 
@@ -63,7 +63,7 @@ pnpm pack --dry-run  # verify publish surface
 - `parseMultipartRelated(res, opts)` — async-generator over parts; cleanup-safe
 - `fetchAndHandleMultipart(url, options)` — `fetch` wrapper with idle/total timeout, AbortSignal, progress
 - `streamToString(readable, encoding?)` — collect a small text part
-- Utility helpers: `extractBoundary`, `flattenDicerHeaders`, `flattenHeaderValue`, `sanitizeFileName`, `deriveNameFromContentId` (some may stay internal — spec decides)
+- Utility helpers: `extractBoundary`, `flattenPartHeaders`, `flattenHeaderValue`, `sanitizeFileName`, `deriveNameFromContentId` (some may stay internal — spec decides)
 - Types: `StreamingMultipartPart`, `PartParser<T>`, `ParseMultipartOptions`, `MultipartFetchResult<T>`, `MultipartHandlerOptions<T>`
 
 ## What this project is NOT

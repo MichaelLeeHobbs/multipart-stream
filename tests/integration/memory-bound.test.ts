@@ -165,7 +165,7 @@ describe.skipIf(SKIP)(
         // it here — heap delta is the contract we care about. We just
         // sanity-check that bytes is in the right order of magnitude
         // (at least ~80% of the body bytes — accounts for any pre-pipe
-        // dicer accounting differences without making the test fragile).
+        // parser accounting differences without making the test fragile).
         expect(result.bytes).toBeGreaterThan(80 * 1024 * 1024);
 
         const delta = peak - baseline;

@@ -14,6 +14,9 @@ import { describe, expect, it } from 'vitest';
  * `pnpm install && pnpm build && pnpm test` flow.
  */
 const distDir = resolve(__dirname, '..', 'dist');
+const manifest = JSON.parse(
+  readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8'),
+) as { dependencies: Record<string, string> };
 const skip =
   process.env.CI === 'true' ||
   !existsSync(resolve(distDir, 'index.js')) ||
@@ -27,9 +30,15 @@ describe.skipIf(skip)('dist build smoke (T-040, T-071)', () => {
     expect(existsSync(resolve(distDir, 'index.d.ts'))).toBe(true);
   });
 
-  it('dist/index.d.ts does NOT import from "dicer" (T-071)', () => {
-    const dts = readFileSync(resolve(distDir, 'index.d.ts'), 'utf8');
-    expect(dts).not.toMatch(/from ['"]dicer['"]/);
-    expect(dts).not.toMatch(/import .* dicer/);
+  it('built entry points do not load dicer', () => {
+    for (const file of ['index.js', 'index.cjs', 'index.d.ts']) {
+      const output = readFileSync(resolve(distDir, file), 'utf8');
+      expect(output).not.toMatch(/\bdicer\b/i);
+    }
   });
+});
+
+it('runtime dependencies do not include dicer', () => {
+  expect(manifest.dependencies).not.toHaveProperty('dicer');
+  expect(manifest.dependencies).toHaveProperty('streamsearch');
 });

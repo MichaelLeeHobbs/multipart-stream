@@ -1,15 +1,9 @@
 /**
  * Header-bag normalizer (FR-016 internal helper).
  *
- * Dicer's per-part `'header'` event delivers a `Record<string, ...>` whose
- * values vary by dicer version + MIME folding behavior:
- *   - dicer 0.3.1's HeaderParser stores `string[]` (latin1-decoded line
- *     content), one entry per repeated header name.
- *   - The ambient shim at `src/internal/dicer.d.ts` declares
- *     `Buffer | Buffer[] | Buffer[][]` defensively.
- *
- * We collapse every shape to a single string per name (joining repeats with
- * `, ` per RFC 7230 §3.2.2) and lowercase the key.
+ * The internal parser emits lowercase names with `string[]` values, one
+ * entry per repeated header. This helper also accepts legacy Buffer shapes
+ * used by its unit tests. Repeated values are joined with `, `.
  *
  * Unit-tested via the integration tests for unusual capitalization
  * (T-057).
@@ -18,9 +12,9 @@
  */
 
 /**
- * Coerce one header value (whatever shape dicer chose) to a single string.
+ * Coerce a header value to a single string.
  *
- * @param v - The raw header value, in any of the shapes documented above.
+ * @param v - The raw header value.
  * @returns The flattened string. Returns `''` for nullish input — matches the
  *   reference impl's contract.
  *
@@ -53,12 +47,12 @@ export function flattenHeaderValue(v: unknown): string {
 /**
  * Lowercase keys and run every value through `flattenHeaderValue`.
  *
- * @param raw - Dicer's raw header bag.
+ * @param raw - Parser's raw header bag.
  * @returns A flat `Record<string, string | undefined>` with lowercase keys.
  *
  * @internal
  */
-export function flattenDicerHeaders(
+export function flattenPartHeaders(
   raw: Record<string, unknown> | undefined,
 ): Record<string, string | undefined> {
   if (raw == null) return {};

@@ -3,11 +3,11 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMultipartRelated, streamToString } from '../../src/index.js';
-import {
-  captureDicerActivity,
-  type DicerActivityTracker,
-} from '../fixtures/dicer-activity.js';
 import { buildMultipartBody } from '../fixtures/multipart-builders.js';
+import {
+  captureParserActivity,
+  type ParserActivityTracker,
+} from '../fixtures/parser-activity.js';
 
 const BOUNDARY = 'CLEANUP-BOUNDARY';
 const TIMEOUTS = { idleTimeoutMs: 5_000, totalTimeoutMs: 60_000 } as const;
@@ -16,7 +16,7 @@ const TIMEOUTS = { idleTimeoutMs: 5_000, totalTimeoutMs: 60_000 } as const;
  * Wait one event-loop turn so `pipe()`-driven destroy/'close' chains can
  * settle. The cleanup function in `parse-multipart-related.ts` is fully
  * synchronous, but `source.destroy()` schedules its 'close' on a microtask
- * and dicer's prototype pumps part bodies in `process.nextTick`.
+ * and parser's prototype pumps part bodies in `process.nextTick`.
  */
 async function settle(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -40,22 +40,22 @@ function buildEnvelope(partCount: number): Buffer {
 /**
  * Common listener-count + destroy assertions used across every termination
  * path. Per `kiln/spec/test-plan.md` §"Resource-Leak Hygiene Suite":
- *   - dicer.listenerCount('part') === 0
- *   - dicer.listenerCount('finish') === 0
- *   - dicer.listenerCount('error') >= 1   (FR-011 retention)
+ *   - parser.listenerCount('part') === 0
+ *   - parser.listenerCount('finish') === 0
+ *   - parser.listenerCount('error') >= 1   (FR-011 retention)
  *   - source.destroyed === true
  *   - every captured part Readable is destroyed (drain-on-finally)
  */
 function assertListenerLeakClean(
-  tracker: DicerActivityTracker,
+  tracker: ParserActivityTracker,
   source: Readable,
 ): void {
-  const dicers = tracker.dicerInstances();
-  expect(dicers.length).toBeGreaterThanOrEqual(1);
-  for (const dicer of dicers) {
-    expect(dicer.listenerCount('part')).toBe(0);
-    expect(dicer.listenerCount('finish')).toBe(0);
-    expect(dicer.listenerCount('error')).toBeGreaterThanOrEqual(1);
+  const parsers = tracker.parserInstances();
+  expect(parsers.length).toBeGreaterThanOrEqual(1);
+  for (const parser of parsers) {
+    expect(parser.listenerCount('part')).toBe(0);
+    expect(parser.listenerCount('finish')).toBe(0);
+    expect(parser.listenerCount('error')).toBeGreaterThanOrEqual(1);
   }
   expect(source.destroyed).toBe(true);
   for (const part of tracker.partStreams()) {
@@ -64,10 +64,10 @@ function assertListenerLeakClean(
 }
 
 describe('parseMultipartRelated — Resource-Leak Hygiene Suite', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
 
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
 
   afterEach(() => {
@@ -259,7 +259,7 @@ describe('parseMultipartRelated — Resource-Leak Hygiene Suite', () => {
     // the iterator has yielded part 0 (so production code's pipe()
     // already wired everything up) and BEFORE we break (so cleanup's
     // unpipe call hits the throwing override). After cleanup runs, we
-    // immediately restore — Node's later cleanup chain (Dicer.onclose →
+    // immediately restore — Node's later cleanup chain (Parser.onclose →
     // source.unpipe) sees the no-op original.
     const originalUnpipe = source.unpipe.bind(source);
     const throwingUnpipe = (() => {
@@ -327,7 +327,7 @@ describe('parseMultipartRelated — Resource-Leak Hygiene Suite', () => {
   });
 
   it('drain-on-finally: 5 unyielded parts after early break all have body.destroyed === true', async () => {
-    // The silent leak BRIEF flags (architecture.md §5.3): dicer's per-part
+    // The silent leak BRIEF flags (architecture.md §5.3): parser's per-part
     // Readables hold buffered chunks and are not GC-eligible until destroyed.
     // The drain-on-finally cleanup guarantees every unyielded part body
     // is destroyed when the generator's finally runs.

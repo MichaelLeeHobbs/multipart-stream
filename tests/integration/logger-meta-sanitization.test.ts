@@ -3,7 +3,7 @@
  * (NFR-DR-S-008 / F-S-007).
  *
  * Per kiln/spec/test-plan.md row T-078:
- *   "trigger T-016 path with a dicer error whose `.message` is 500 chars +
+ *   "trigger T-016 path with a parser error whose `.message` is 500 chars +
  *   control bytes; assert mockLogger event arg's `meta.errSummary.message.length
  *   <= 120` and contains no \x00-\x1F bytes; assert meta does NOT contain a
  *   `chunk` / `bytes` / raw `Error` field; asserts NFR-DR-S-008 contract."
@@ -22,11 +22,11 @@ import {
   parseMultipartRelated,
   streamToString,
 } from '../../src/index.js';
-import {
-  captureDicerActivity,
-  type DicerActivityTracker,
-} from '../fixtures/dicer-activity.js';
 import { buildMultipartBody } from '../fixtures/multipart-builders.js';
+import {
+  captureParserActivity,
+  type ParserActivityTracker,
+} from '../fixtures/parser-activity.js';
 import { startMultipartServer } from '../fixtures/start-multipart-server.js';
 
 const BOUNDARY = 'LOGGER-META-SANITIZATION-BOUNDARY';
@@ -45,19 +45,19 @@ async function settle(): Promise<void> {
 }
 
 describe('T-078 — Logger meta sanitization gate (NFR-DR-S-008)', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
 
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
 
   afterEach(() => {
     tracker.restore();
   });
 
-  it('T-078: late-emit dicer error with 500-char message + control bytes is sanitized in meta', async () => {
+  it('T-078: late-emit parser error with 500-char message + control bytes is sanitized in meta', async () => {
     // Reuse the T-016 late-emit path — the same shape that exercises the
-    // FR-011 retained dicer 'error' listener AFTER the generator's finally
+    // FR-011 retained parser 'error' listener AFTER the generator's finally
     // has run.
     const buf = buildMultipartBody({
       boundary: BOUNDARY,
@@ -77,7 +77,7 @@ describe('T-078 — Logger meta sanitization gate (NFR-DR-S-008)', () => {
 
     try {
       // Exhaust the iterator (success path) so cleanup runs and the
-      // `cleaned` flag is set. Then manually emit a dicer 'error' with
+      // `cleaned` flag is set. Then manually emit a parser 'error' with
       // an attacker-shaped message: 500 chars including control bytes
       // and an ANSI escape sequence.
       for await (const part of parseMultipartRelated(source, {
@@ -91,10 +91,10 @@ describe('T-078 — Logger meta sanitization gate (NFR-DR-S-008)', () => {
 
       await settle();
 
-      const dicers = tracker.dicerInstances();
-      expect(dicers.length).toBeGreaterThanOrEqual(1);
-      const dicer = dicers[0]!;
-      expect(dicer.listenerCount('error')).toBeGreaterThanOrEqual(1);
+      const parsers = tracker.parserInstances();
+      expect(parsers.length).toBeGreaterThanOrEqual(1);
+      const parser = parsers[0]!;
+      expect(parser.listenerCount('error')).toBeGreaterThanOrEqual(1);
 
       // Attacker-shaped error message: 500 ASCII chars + control bytes
       // + ANSI escape sequence. Sanitizer must JSON-stringify, redact
@@ -104,8 +104,8 @@ describe('T-078 — Logger meta sanitization gate (NFR-DR-S-008)', () => {
         'attacker payload\x00with\x07control\x1B[31mbytes ' +
         'x'.repeat(500);
       const lateErr = new Error(longMessage);
-      lateErr.name = 'LateDicerWithControlBytes';
-      dicer.emit('error', lateErr);
+      lateErr.name = 'LateParserWithControlBytes';
+      parser.emit('error', lateErr);
 
       await settle();
 
@@ -122,7 +122,7 @@ describe('T-078 — Logger meta sanitization gate (NFR-DR-S-008)', () => {
       };
       expect(meta).toBeDefined();
       expect(meta.errSummary).toBeDefined();
-      expect(meta.errSummary.name).toBe('LateDicerWithControlBytes');
+      expect(meta.errSummary.name).toBe('LateParserWithControlBytes');
 
       // Length cap: <= 121 chars (120 + the ellipsis suffix). The brief
       // says <=120 but the JSON-stringify wraps the message in `"..."`

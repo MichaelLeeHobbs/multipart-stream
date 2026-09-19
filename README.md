@@ -14,8 +14,7 @@ npm install @ubercode/multipart-stream
 yarn add @ubercode/multipart-stream
 ```
 
-Requires Node `>= 20.18.0`. Single runtime dependency: `dicer@0.3.1` (pinned
-exact).
+Requires Node `>= 20.18.0`. The sole runtime dependency is `streamsearch@1.1.0`; multipart headers and part streams are parsed inside this package.
 
 ## Quickstart
 
@@ -101,10 +100,7 @@ for await (const part of parseMultipartRelated(req as unknown as Readable, {
 }
 ```
 
-The library never pauses dicer's internal state machine on your behalf —
-your parser must drain or destroy each `part.body` before requesting the
-next part. If you don't, the iterator's `finally` destroys leftover bodies
-for you (FR-010), but that costs latency.
+Drain or destroy each `part.body` before requesting the next part. The parser applies backpressure while a body is waiting for a reader; the iterator destroys leftover bodies when it closes.
 
 ## API
 

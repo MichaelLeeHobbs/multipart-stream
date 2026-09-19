@@ -1,5 +1,5 @@
 /**
- * `parseMultipartRelated` — Layer A (parser/dicer adapter). FR-001.
+ * `parseMultipartRelated` — streaming parser adapter. FR-001.
  *
  * Resource-cap enforcement (NFR-DR-S-001/004/012):
  *   - `maxPartBytes` (NFR-DR-S-001): each per-part body Readable gets a
@@ -7,7 +7,7 @@
  *     the listener pushes `MultipartPartTooLargeError` into the queue and
  *     destroys the offending part body. No default — when undefined, no
  *     cap is enforced.
- *   - `maxParts` (NFR-DR-S-012): the dicer 'part' counter is checked at
+ *   - `maxParts` (NFR-DR-S-012): the parser 'part' counter is checked at
  *     each emit; on overflow, push `MultipartTooManyPartsError`. Default
  *     `10_000` when undefined.
  *   - `maxHeadersPerPart` + `maxHeaderBytesPerPart` (NFR-DR-S-004): on
@@ -33,22 +33,13 @@
  *
  * Cleanup contract: the `finally` cleanup drains unyielded part bodies
  * (FR-010), removes 'data'/'error'/'end' listeners on source and 'part'/
- * 'finish' on dicer, unpipes + destroys source, and KEEPS dicer's 'error'
+ * 'finish' on parser, unpipes + destroys source, and KEEPS parser's 'error'
  * listener for late-emit observability (FR-011). Truncation detection
- * (FR-022) fires when source 'end' arrives without dicer 'finish' having
+ * (FR-022) fires when source 'end' arrives without parser 'finish' having
  * fired.
  */
 
 import { PassThrough, type Readable } from 'node:stream';
-
-import type { DicerHeaderBag, DicerPartStream } from 'dicer';
-// FR-DR-A-027: import dicer through the hand-written ambient shim. The
-// FR-DR-A-028 normalization shape lives at the call site below (and must
-// stay this way — the cross-format consumer test asserts the runtime shape
-// works under both ESM and CJS bundles). DO NOT collapse this to
-// `import { default as Dicer } from 'dicer'` — that defeats the
-// normalization that handles the `module.exports = Dicer` CJS shape.
-import dicerMod from 'dicer';
 
 import {
   MultipartAbortError,
@@ -58,8 +49,13 @@ import {
   MultipartTruncatedError,
 } from './errors.js';
 import { defaultLogger } from './internal/default-logger.js';
-import { flattenDicerHeaders } from './internal/flatten-headers.js';
+import { flattenPartHeaders } from './internal/flatten-headers.js';
 import { summarizeError } from './internal/format-error-embed.js';
+import {
+  MultipartParser,
+  type MultipartPartStream,
+  type PartHeaders,
+} from './internal/multipart-parser.js';
 import { normalizeInput } from './internal/normalize-input.js';
 import { createQueueNotifier } from './internal/queue-notifier.js';
 import { setupTimers } from './internal/timers.js';
@@ -69,57 +65,6 @@ import type {
   ParseMultipartOptions,
   StreamingMultipartPart,
 } from './types.js';
-
-/** @internal */
-type DicerDefaultExport = typeof dicerMod;
-
-/**
- * Measure the byte length of one or more header VALUES (without the name
- * or framing). Dicer 0.3.1's HeaderParser delivers each header as
- * `string[]` (latin1-decoded line content per repeated header value). We
- * sum each entry's UTF-8 byte length.
- *
- * For the broader forward-compat shapes documented in the ambient shim
- * (`Buffer`, `Buffer[]`, `Buffer[][]`), the function recurses through
- * arrays and falls back to 0 for shapes it can't measure. The cap is
- * SOFT — under-counting at worst means the cap doesn't trip on a
- * forward-incompatible dicer version, NOT that the parser crashes.
- *
- * NOT exported. Used only by the maxHeaderBytesPerPart cap inside the
- * `'header'` event listener.
- *
- * @internal
- */
-function measureHeaderValueBytes(value: unknown): number {
-  if (typeof value === 'string') return Buffer.byteLength(value);
-  if (Array.isArray(value)) {
-    let total = 0;
-    for (const inner of value) {
-      total += measureHeaderValueBytes(inner);
-    }
-    return total;
-  }
-  // Forward-compat: Buffer / Buffer[] would arrive via the array
-  // branch above (Buffer is recursed-into) or directly here. Defensive
-  // — returns 0 for unknown shapes, which is safe under the SOFT-cap
-  // contract documented above.
-  if (Buffer.isBuffer(value)) return value.length;
-  return 0;
-}
-
-/**
- * FR-DR-A-028 default-export normalization shape (typed; no `as any`).
- *
- * `dicer` is a CJS module whose `module.exports = Dicer` is the constructor
- * itself. Under ESM, Node wraps it as `{ default: Dicer }`; under CJS the
- * import is the raw constructor. The normalizer below picks the right
- * binding for both module formats. The cross-format consumer test (T-072)
- * proves this works against `dist/index.js` AND `dist/index.cjs`.
- *
- * @internal
- */
-const Dicer: DicerDefaultExport =
-  (dicerMod as { default?: DicerDefaultExport }).default ?? dicerMod;
 
 /**
  * Parse a `multipart/related` envelope as a typed async-iterator of
@@ -133,7 +78,7 @@ const Dicer: DicerDefaultExport =
  *   are validated synchronously via `validatePositiveTimeout` — both must be
  *   positive finite integers in `[1, 2_147_483_647]` (NFR-DR-S-009).
  * @returns An `AsyncGenerator<StreamingMultipartPart, void, void>` that
- *   yields parts in dicer's emit order.
+ *   yields parts in parser's emit order.
  *
  * @throws {TypeError} `multipart: idleTimeoutMs must be a positive finite
  *   integer in [1, 2_147_483_647]; …` when `idleTimeoutMs` is missing,
@@ -157,7 +102,7 @@ const Dicer: DicerDefaultExport =
  *   aborted at call time — first `.next()` rejects synchronously per FR-009).
  *   `error.reason` is the caller's `signal.reason` verbatim (F-S-006).
  * @throws {MultipartTruncatedError} when the source emits `'end'` before
- *   dicer emits `'finish'` (FR-022).
+ *   parser emits `'finish'` (FR-022).
  *
  * @example
  *   for await (const part of parseMultipartRelated(res, {
@@ -183,7 +128,7 @@ export function parseMultipartRelated(
 }
 
 // The async generator below is intentionally one function — see the
-// eslint.config.mjs per-file override. It owns three concerns (dicer
+// eslint.config.mjs per-file override. It owns three concerns (parser
 // wiring, listener attachment before pipe per FR-012, and the yield loop)
 // that are deliberately kept together. Splitting into helpers would require
 // shared closure state across helper boundaries and obscure the "all
@@ -229,8 +174,8 @@ async function* parseMultipartRelatedImpl(
   //    all share the same logger.
   const logger: Logger = opts.logger ?? defaultLogger;
 
-  // 3. Construct dicer via the FR-DR-A-028 normalization at the top of file.
-  const dicer = new Dicer({ boundary });
+  // 3. Construct the internal parser.
+  const parser = new MultipartParser(boundary);
 
   // 4. Queue+notifier bridge (Layer C internal).
   const queue = createQueueNotifier();
@@ -238,19 +183,19 @@ async function* parseMultipartRelatedImpl(
   // Operation state used by the listeners.
   let bytesReceived = 0;
   let nextPartIndex = 0;
-  let dicerFinished = false;
+  let parserFinished = false;
   let cleaned = false;
   // Set true when the abort came from the combined-signal handler so the
   // cleanup function knows the queue already received the discriminated
   // error — avoids double-pushing or racing with idle/total firings.
   let abortPushed = false;
-  // Set of every per-part Readable dicer has emitted. We need this in
+  // Set of every per-part Readable parser has emitted. We need this in
   // addition to queue.drainPendingParts() because a part may have been
-  // emitted on dicer's 'part' event but NOT yet reached the per-part
+  // emitted on parser's 'part' event but NOT yet reached the per-part
   // 'header' event (so it never made it into the queue). Cleanup must
-  // still destroy it — otherwise dicer's per-part Readable buffers a
+  // still destroy it — otherwise parser's per-part Readable buffers a
   // chunk that is never freed (the silent-leak BRIEF flags).
-  const allPartStreams = new Set<DicerPartStream>();
+  const allPartStreams = new Set<MultipartPartStream | PassThrough>();
   const startMs = Date.now();
 
   // 4b. Set up the composite abort plumbing (FR-007/FR-008/FR-009/
@@ -284,7 +229,7 @@ async function* parseMultipartRelatedImpl(
 
   // Combined-signal handler — fires when ANY of idle/total/caller-abort
   // trigger AFTER setupTimers returned. Same path used for source 'error'
-  // and dicer 'error': push into queue, the for-await loop's
+  // and parser 'error': push into queue, the for-await loop's
   // item.type === 'error' branch surfaces it, and the iterator's `finally`
   // runs cleanup() which also calls timers.cleanup(). The `cleaned` flag
   // protects against late-fire pushes after cleanup ran first (e.g.
@@ -322,22 +267,18 @@ async function* parseMultipartRelatedImpl(
     }
   };
 
-  // Running counter of dicer 'part' emits. Compared against maxParts on
+  // Running counter of parser 'part' emits. Compared against maxParts on
   // every emit; once observed > cap, push the error and destroy the
   // offending stream. Counts every emit including those past the cap so
   // the surfaced `observed` value is accurate.
   let partsObserved = 0;
 
   // 5. Attach ALL listeners BEFORE pipe() (FR-012 / US-011). This is the
-  //    critical invariant — synchronous early errors from dicer (e.g. a
+  //    critical invariant — synchronous early errors from parser (e.g. a
   //    malformed first byte producing an immediate 'error') must surface
   //    via the queue rather than being lost.
-  const onPart = (partStream: DicerPartStream): void => {
-    // Dicer's per-part stream emits a single 'header' event with the full
-    // header bag. dicer 0.3.1's HeaderParser delivers this as
-    // Record<string, string[]>; the ambient shim documents the broader
-    // shape Buffer | Buffer[] | Buffer[][] for forward-compat. The
-    // flattenDicerHeaders helper handles every documented variant.
+  const onPart = (partStream: MultipartPartStream): void => {
+    // The parser emits the part before its headers so this listener is ready.
     allPartStreams.add(partStream);
     const partIndex = nextPartIndex++;
 
@@ -363,38 +304,14 @@ async function* parseMultipartRelatedImpl(
       value: {},
     };
 
-    const onHeader = (raw: unknown): void => {
-      // maxHeadersPerPart (count) + maxHeaderBytesPerPart (bytes)
-      // (NFR-DR-S-004). Inspect the raw bag BEFORE flattening so
-      // a header with N repeated values counts as N headers (matching how
-      // dicer/HTTP semantics see the wire). Bytes are measured as
-      // `name + ': ' + value + '\r\n'` per header line — a deterministic
-      // approximation of the on-the-wire framing. We measure on the
-      // RAW values (Buffer | Buffer[] | Buffer[][] | string |
-      // string[]) without flattening so the count is conservative
-      // (under-counts only on shapes the wire wouldn't actually produce).
-      // Each header line's wire framing is `name + ": " + value + "\r\n"`.
-      // We charge 4 bytes for `": "` + `"\r\n"` per logical line (one
-      // line per repeated header value). The byte count is approximate
-      // — sufficient for the maxHeaderBytesPerPart cap, which is a
-      // soft defense against attacker-bombed envelopes. Dicer 0.3.1
-      // always delivers each header value as `string[]` (one entry per
-      // repeat); the forward-compat broader shape from the ambient
-      // shim is normalized to a uniform array via Array.isArray below.
-      const bag = raw as DicerHeaderBag | undefined;
+    const onHeader = (raw: unknown, rawHeaderBlock: Buffer): void => {
+      // Count repeated values separately before flattening the header bag.
+      const bag = raw as PartHeaders | undefined;
       let headerCount = 0;
-      let headerBytes = 0;
-      if (bag != null) {
-        for (const name of Object.keys(bag)) {
-          const value = (bag as Record<string, unknown>)[name];
-          const nameBytes = Buffer.byteLength(name);
-          const values = Array.isArray(value) ? value : [value];
-          for (const inner of values) {
-            headerCount += 1;
-            headerBytes += nameBytes + 4 + measureHeaderValueBytes(inner);
-          }
-        }
+      if (bag !== undefined) {
+        for (const values of Object.values(bag)) headerCount += values.length;
       }
+      const headerBytes = rawHeaderBlock.length;
       if (headerCount > maxHeadersPerPart) {
         if (!partStream.destroyed) partStream.destroy();
         queue.signalError(
@@ -420,7 +337,7 @@ async function* parseMultipartRelatedImpl(
         return;
       }
 
-      headersAccumulator.value = flattenDicerHeaders(
+      headersAccumulator.value = flattenPartHeaders(
         raw as Record<string, unknown> | undefined,
       );
       const headers = headersAccumulator.value;
@@ -434,7 +351,7 @@ async function* parseMultipartRelatedImpl(
       const contentLength = Number.isFinite(parsedLen) ? parsedLen : undefined;
 
       // maxPartBytes (NFR-DR-S-001). When a cap is configured, wrap the
-      // dicer per-part Readable in a counting PassThrough so the
+      // parser per-part Readable in a counting PassThrough so the
       // public `body` exposed to consumers can observe every byte without
       // racing the consumer's own listener attach (PassThrough buffers
       // upstream writes until a downstream listener is attached, so the
@@ -444,7 +361,7 @@ async function* parseMultipartRelatedImpl(
       // it on every termination path.
       //
       // On overflow we:
-      //   (a) destroy the upstream partStream to stop dicer pumping,
+      //   (a) destroy the upstream partStream to stop parser pumping,
       //   (b) push the typed error into the queue,
       //   (c) END the counter cleanly (NOT destroy) so the consumer's
       //       drain on `body` resolves naturally — without this, the
@@ -454,17 +371,12 @@ async function* parseMultipartRelatedImpl(
       //       counter cleanly, the consumer's for-await of `body`
       //       completes; control returns to the outer for-await of the
       //       iterator; that .next() resolves with our error.
-      let publicBody: Readable = partStream as unknown as Readable;
+      let publicBody: Readable = partStream;
       if (maxPartBytes !== undefined) {
         const cap = maxPartBytes;
         let partBytesAccumulated = 0;
         let tripped = false;
         const counter = new PassThrough();
-        // PassThrough extends Readable, and DicerPartStream extends
-        // Readable per the ambient shim, so structural typing accepts
-        // the PassThrough directly. The Set is used only for cleanup-
-        // time `.destroy()` calls (Node Readable API), so the structural
-        // overlap is safe.
         allPartStreams.add(counter);
         // Counter for upstream data. We use a Transform-style approach:
         // intercept partStream's 'data' events with a counting listener
@@ -478,7 +390,7 @@ async function* parseMultipartRelatedImpl(
           partBytesAccumulated += chunk.length;
           if (partBytesAccumulated > cap) {
             tripped = true;
-            // Stop upstream dicer.
+            // Stop upstream parser.
             if (!partStream.destroyed) partStream.destroy();
             // Push the typed error BEFORE we end the counter so the
             // queue ordering puts our error ahead of any post-end
@@ -521,12 +433,12 @@ async function* parseMultipartRelatedImpl(
         index: partIndex,
         boundary,
         headers,
-        rawHeaders: Buffer.alloc(0),
+        rawHeaders: rawHeaderBlock,
         contentType,
         ...(contentId !== undefined ? { contentId } : {}),
         ...(contentLength !== undefined ? { contentLength } : {}),
         // When maxPartBytes is configured, body is the PassThrough that
-        // wraps dicer's per-part Readable; otherwise body is dicer's
+        // wraps parser's per-part Readable; otherwise body is parser's
         // per-part Readable directly. Both expose Node `Readable`.
         body: publicBody,
       };
@@ -537,7 +449,7 @@ async function* parseMultipartRelatedImpl(
       fireProgress();
     };
     partStream.once('header', onHeader);
-    // Per-part 'error' bridge. If dicer's per-part stream errors out
+    // Per-part 'error' bridge. If parser's per-part stream errors out
     // (e.g. truncated part body — "Part terminated early due to
     // unexpected end of multipart data"), the error propagates as an
     // unhandled 'error' event on the body Readable and Node terminates
@@ -557,17 +469,17 @@ async function* parseMultipartRelatedImpl(
   };
 
   const onFinish = (): void => {
-    dicerFinished = true;
+    parserFinished = true;
     queue.signalEnd();
   };
 
   // FR-011 contract — this listener is INTENTIONALLY retained through the
   // generator's `finally` block. Before cleanup runs it pushes the error
   // into the queue; AFTER cleanup it routes the error observation through
-  // the configured logger so late-tick dicer errors never escape as
+  // the configured logger so late-tick parser errors never escape as
   // uncaught process exceptions. The `cleaned` flag is the sole
   // discriminator.
-  const onDicerError = (err: Error): void => {
+  const onParserError = (err: Error): void => {
     if (cleaned) {
       logger({
         level: 'warn',
@@ -591,41 +503,41 @@ async function* parseMultipartRelatedImpl(
     queue.signalError(err);
   };
 
-  // FR-022 truncation detector: when the source emits 'end' but dicer has
+  // FR-022 truncation detector: when the source emits 'end' but parser has
   // NOT yet emitted 'finish' on a subsequent tick, the response was cut
   // mid-envelope. Push a MultipartTruncatedError so the consumer's next
-  // `.next()` sees it. dicer may also emit its own 'error' if the
+  // `.next()` sees it. parser may also emit its own 'error' if the
   // truncation happens mid-part-header; the queue is first-fire-wins, so
   // whichever path fires first is what surfaces. Either outcome runs the
   // same FR-010 cleanup.
   //
-  // We defer the dicerFinished check to `setImmediate` so well-formed
-  // envelopes (where dicer's 'finish' fires synchronously after source
+  // We defer the parserFinished check to `setImmediate` so well-formed
+  // envelopes (where parser's 'finish' fires synchronously after source
   // 'end' through the pipe machinery) do not race-trip the truncation
   // path. setImmediate runs strictly AFTER any pending I/O and any
   // already-scheduled process.nextTick / promise microtasks — long enough
-  // for dicer's internal end-of-stream tick to land.
+  // for parser's internal end-of-stream tick to land.
   const onSourceEnd = (): void => {
     setImmediate(() => {
-      if (dicerFinished) return;
+      if (parserFinished) return;
       if (cleaned) return;
       queue.signalError(new MultipartTruncatedError(bytesReceived));
     });
   };
 
-  dicer.on('part', onPart);
-  dicer.on('finish', onFinish);
-  dicer.on('error', onDicerError);
+  parser.on('part', onPart);
+  parser.on('finish', onFinish);
+  parser.on('error', onParserError);
   source.on('data', onSourceData);
   source.on('error', onSourceError);
   source.on('end', onSourceEnd);
 
   // 6. Pipe AFTER all listeners are attached (FR-012).
-  source.pipe(dicer);
+  source.pipe(parser);
 
   // FR-010 cleanup function — idempotent (`cleaned` guard). Runs from the
   // generator's `finally` on every termination path (success, caller
-  // `break`, parser/source/dicer error, timeout/abort). The function is
+  // `break`, parser/source error, timeout/abort). The function is
   // intentionally synchronous and total — no awaits, no thrown errors —
   // because the cleanup contract demands it run unconditionally and
   // exactly once.
@@ -643,7 +555,7 @@ async function* parseMultipartRelatedImpl(
     // (2) Try to unpipe — wrap in a logged catch (FR-017 silent-catch
     //     replacement site, architecture.md §7).
     try {
-      source.unpipe(dicer);
+      source.unpipe(parser);
     } catch (err) {
       logger({
         level: 'warn',
@@ -660,7 +572,7 @@ async function* parseMultipartRelatedImpl(
     }
 
     // (4) Drain unyielded parts and destroy each one's body. This is the
-    //     silent-leak BRIEF flags (architecture.md §5.3): dicer's per-part
+    //     silent-leak BRIEF flags (architecture.md §5.3): parser's per-part
     //     Readables hold buffered chunks and are not GC-eligible until
     //     destroyed. If the consumer broke out of the for-await loop,
     //     every still-pending part is leaked unless we destroy here.
@@ -669,7 +581,7 @@ async function* parseMultipartRelatedImpl(
       // exposes `.destroy()` directly.
       part.body.destroy();
     }
-    // Belt-and-suspenders: also destroy any per-part Readable that dicer
+    // Belt-and-suspenders: also destroy any per-part Readable that parser
     // emitted on 'part' but that never made it into the queue (i.e. it
     // never fired 'header' before cleanup ran — happens on synchronous
     // termination paths like an immediate source error).
@@ -678,14 +590,14 @@ async function* parseMultipartRelatedImpl(
     }
     allPartStreams.clear();
 
-    // (5) Remove dicer 'part' and 'finish' listeners. INTENTIONALLY do NOT
-    //     remove dicer's 'error' listener — that's the FR-011 contract.
+    // (5) Remove parser 'part' and 'finish' listeners. INTENTIONALLY do NOT
+    //     remove parser's 'error' listener — that's the FR-011 contract.
     //     The retained listener checks the `cleaned` flag (set above) to
     //     route late-tick errors through `logger.warn` instead of trying
     //     to push into the now-closed queue.
-    dicer.off('part', onPart);
-    dicer.off('finish', onFinish);
-    // dicer.off('error', onDicerError);  ← deliberately left attached
+    parser.off('part', onPart);
+    parser.off('finish', onFinish);
+    // parser.off('error', onParserError);  ← deliberately left attached
 
     // (6) Cancel idle/total timers and detach the caller-signal listener
     //     (Layer C). timers.cleanup() is itself idempotent. We also remove
