@@ -70,7 +70,7 @@
     "access": "public"
   },
   "dependencies": {
-    "dicer": "0.3.1"
+    "streamsearch": "1.1.0"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.0",

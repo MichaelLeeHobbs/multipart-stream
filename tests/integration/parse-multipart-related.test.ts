@@ -95,7 +95,7 @@ describe('parseMultipartRelated — Response input (T-001 / T-004 / T-024)', () 
     expect(res.body).toBeDefined();
     let count = 0;
     for await (const part of parseMultipartRelated(res, TIMEOUTS)) {
-      // drain the body so dicer can advance
+      // drain the body so parser can advance
       await streamToString(part.body);
       count += 1;
     }
@@ -179,14 +179,14 @@ describe('parseMultipartRelated — Readable + boundary input (T-005)', () => {
 });
 
 describe('parseMultipartRelated — synchronous early errors (T-022)', () => {
-  it('T-022: a synchronous dicer error surfaces from the first .next() (proves listeners attached pre-pipe)', async () => {
-    // Feed dicer an envelope that ends without ever matching the
-    // configured boundary. dicer's `_realFinish` path emits an 'error'
+  it('T-022: a synchronous parser error surfaces from the first .next() (proves listeners attached pre-pipe)', async () => {
+    // Feed parser an envelope that ends without ever matching the
+    // configured boundary. parser's `_realFinish` path emits an 'error'
     // event on next tick: "Unexpected end of multipart data". The point
     // of T-022 is that this error reaches the QUEUE — i.e. our 'error'
-    // listener was attached BEFORE source.pipe(dicer). If the listener
+    // listener was attached BEFORE source.pipe(parser). If the listener
     // had been attached after pipe(), the error would have been an
-    // unhandled 'error' event on dicer and would have crashed the
+    // unhandled 'error' event on parser and would have crashed the
     // process.
     const buf = Buffer.from('garbage with no boundary\r\n');
     const iter = parseMultipartRelated(Readable.from(buf), {
@@ -345,7 +345,7 @@ describe('parseMultipartRelated — source error path', () => {
       read() {
         if (pushed) return;
         pushed = true;
-        // Push a small prefix to the dicer pipeline, then schedule an
+        // Push a small prefix to the parser pipeline, then schedule an
         // error on the next tick so the error fires after pipe() has
         // processed the prefix chunk.
         this.push(buf.subarray(0, 20));

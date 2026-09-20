@@ -3,7 +3,7 @@
  *
  * Internal: NOT re-exported from `src/index.ts`. Lives under `src/internal/`
  * per FR-016 (the spec keeps `extractBoundary` public and `sanitizeFileName`,
- * `flattenDicerHeaders`, `flattenHeaderValue`, `deriveNameFromContentId`
+ * `flattenPartHeaders`, `flattenHeaderValue`, `deriveNameFromContentId`
  * internal so the publish surface stays tiny).
  *
  * The function turns an arbitrary attacker-controllable string (e.g. the

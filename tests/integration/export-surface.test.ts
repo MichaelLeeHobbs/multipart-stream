@@ -31,7 +31,7 @@ describe('export-surface markers', () => {
     expect(typeof iter.next).toBe('function');
     expect(typeof iter.return).toBe('function');
     expect(typeof iter.throw).toBe('function');
-    // Tear down the iterator to release dicer's listeners on the source.
+    // Tear down the iterator to release parser's listeners on the source.
     void iter.return(undefined);
   });
 

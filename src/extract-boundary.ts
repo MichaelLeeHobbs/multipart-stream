@@ -150,7 +150,7 @@ export function extractBoundary(
       // Per RFC, an unterminated quoted string is malformed. We accept what
       // we got rather than throwing — extractBoundary's failure modes are
       // about missing/empty boundary, not malformed framing. The downstream
-      // dicer call will raise on a bad boundary anyway.
+      // parser call will raise on a bad boundary anyway.
       void closed;
       value = buf.join('');
     } else {

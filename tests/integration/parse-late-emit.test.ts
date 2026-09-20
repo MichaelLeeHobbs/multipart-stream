@@ -3,11 +3,11 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseMultipartRelated, streamToString } from '../../src/index.js';
-import {
-  captureDicerActivity,
-  type DicerActivityTracker,
-} from '../fixtures/dicer-activity.js';
 import { buildMultipartBody } from '../fixtures/multipart-builders.js';
+import {
+  captureParserActivity,
+  type ParserActivityTracker,
+} from '../fixtures/parser-activity.js';
 
 const BOUNDARY = 'LATE-EMIT-BOUNDARY';
 const TIMEOUTS = { idleTimeoutMs: 5_000, totalTimeoutMs: 60_000 } as const;
@@ -24,18 +24,18 @@ async function settle(): Promise<void> {
   });
 }
 
-describe('parseMultipartRelated — FR-011 late-emit dicer error path (T-016)', () => {
-  let tracker: DicerActivityTracker;
+describe('parseMultipartRelated — FR-011 late-emit parser error path (T-016)', () => {
+  let tracker: ParserActivityTracker;
 
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
 
   afterEach(() => {
     tracker.restore();
   });
 
-  it('T-016: post-cleanup dicer error routes through logger.warn — no uncaughtException', async () => {
+  it('T-016: post-cleanup parser error routes through logger.warn — no uncaughtException', async () => {
     const buf = buildMultipartBody({
       boundary: BOUNDARY,
       parts: [
@@ -51,7 +51,7 @@ describe('parseMultipartRelated — FR-011 late-emit dicer error path (T-016)', 
     });
 
     // Spy on uncaughtException — the FR-011 contract is that late-tick
-    // dicer errors NEVER escape as uncaught process exceptions.
+    // parser errors NEVER escape as uncaught process exceptions.
     const uncaught = vi.fn();
     process.on('uncaughtException', uncaught);
 
@@ -67,21 +67,21 @@ describe('parseMultipartRelated — FR-011 late-emit dicer error path (T-016)', 
 
       // After break the generator's finally has already run; cleanup()
       // has set `cleaned = true`. Now manually emit 'error' on the
-      // retained dicer instance — this is the late-emit scenario.
+      // retained parser instance — this is the late-emit scenario.
       await settle();
 
-      const dicers = tracker.dicerInstances();
-      expect(dicers.length).toBeGreaterThanOrEqual(1);
-      const dicer = dicers[0]!;
-      expect(dicer.listenerCount('error')).toBeGreaterThanOrEqual(1);
+      const parsers = tracker.parserInstances();
+      expect(parsers.length).toBeGreaterThanOrEqual(1);
+      const parser = parsers[0]!;
+      expect(parser.listenerCount('error')).toBeGreaterThanOrEqual(1);
 
       // Construct an error with attacker-shaped message: 500 chars + a
       // control byte (NFR-DR-S-008 — the truncate path keeps it bounded
       // and the full sanitizer additionally redacts the control byte).
       const longMessage = 'x'.repeat(500);
       const lateErr = new Error(longMessage);
-      lateErr.name = 'LateDicerError';
-      dicer.emit('error', lateErr);
+      lateErr.name = 'LateParserError';
+      parser.emit('error', lateErr);
 
       // Give the listener a tick to log.
       await settle();
@@ -102,7 +102,7 @@ describe('parseMultipartRelated — FR-011 late-emit dicer error path (T-016)', 
       };
       expect(meta).toBeDefined();
       expect(meta.errSummary).toBeDefined();
-      expect(meta.errSummary.name).toBe('LateDicerError');
+      expect(meta.errSummary.name).toBe('LateParserError');
       // Message is bounded at 120 chars + ellipsis; the full sanitizer
       // additionally control-byte redacts.
       expect(meta.errSummary.message.length).toBeLessThanOrEqual(121);
@@ -122,11 +122,11 @@ describe('parseMultipartRelated — FR-011 late-emit dicer error path (T-016)', 
     }
   });
 
-  it('FR-011: PRE-cleanup dicer errors still route to the queue', async () => {
+  it('FR-011: PRE-cleanup parser errors still route to the queue', async () => {
     // Sanity check: the cleaned-flag discriminator only kicks in AFTER the
     // generator's finally has run. While the generator is still iterating,
-    // dicer errors must still surface from the queue. The simplest way to
-    // exercise this: feed an envelope that dicer rejects (T-022 pattern).
+    // parser errors must still surface from the queue. The simplest way to
+    // exercise this: feed an envelope that parser rejects (T-022 pattern).
     const source = Readable.from(Buffer.from('garbage-not-a-multipart-body'));
     const logger = vi.fn();
 

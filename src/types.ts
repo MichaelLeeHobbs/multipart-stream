@@ -30,7 +30,7 @@ import type { Readable } from 'node:stream';
 export interface StreamingMultipartPart {
   /**
    * Zero-based ordinal of this part within the multipart envelope, in the
-   * order dicer emits them.
+   * order parser emits them.
    */
   readonly index: number;
 
@@ -42,15 +42,14 @@ export interface StreamingMultipartPart {
 
   /**
    * Lowercased part headers as flat strings. Names are normalized to
-   * lowercase; values are the result of internal flattening over dicer's
-   * `Buffer | Buffer[] | Buffer[][]` shapes.
+   * lowercase; repeated values are joined with `, `.
    *
    * Reads are `string | undefined` due to `noUncheckedIndexedAccess`.
    */
   readonly headers: Readonly<Record<string, string | undefined>>;
 
   /**
-   * Raw header block bytes captured from dicer (concatenated).
+   * Raw header block bytes, including the terminating CRLF pair.
    *
    * Surfaced for callers who need byte-exact framing for re-emission or
    * signature verification.
@@ -70,16 +69,16 @@ export interface StreamingMultipartPart {
 
   /**
    * Pre-extracted `content-length` parsed via `parseInt(_, 10)`, or
-   * `undefined` if the header is absent or non-numeric. Note: dicer streams
+   * `undefined` if the header is absent or non-numeric. Note: parser streams
    * regardless — this value is informational, not a contract.
    */
   readonly contentLength?: number | undefined;
 
   /**
    * The streaming body of this part as a Node `Readable`. Backed directly by
-   * dicer's per-part stream — no intermediate buffering. Callers MUST consume
-   * (drain, pipe, or destroy) before requesting the next part; the library
-   * cannot pause dicer's state machine for them.
+   * parser's per-part stream — no intermediate buffering. The parser applies
+   * backpressure when this stream's buffer fills. Callers should consume
+   * (drain, pipe, or destroy) before requesting the next part.
    */
   readonly body: Readable;
 }
@@ -163,7 +162,7 @@ export interface ProgressSnapshot {
  * union, not a positional argument.
  *
  * Per NFR-DR-S-008, `meta` NEVER contains raw chunk bytes. When the library
- * logs an `Error` whose source is dicer or the source stream, it passes only
+ * logs an `Error` whose source is parser or the source stream, it passes only
  * an `errSummary: { name, message }` object with `message` truncated to <=
  * 120 chars, control characters redacted, and the value JSON-stringified
  * per NFR-DR-S-006.
@@ -242,7 +241,7 @@ export interface ParseMultipartOptions {
   maxParts?: number | undefined;
 
   /**
-   * Maximum number of distinct headers per part (NFR-DR-S-004). Defaults to
+   * Maximum number of header lines per part, including repeated names (NFR-DR-S-004). Defaults to
    * `100` when omitted.
    */
   maxHeadersPerPart?: number | undefined;

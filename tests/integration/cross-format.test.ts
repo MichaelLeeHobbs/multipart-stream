@@ -9,10 +9,8 @@
  *
  *  - T-052 / T-072: prove `require('./dist/index.cjs')` AND
  *    `await import('./dist/index.js')` BOTH yield a working
- *    `parseMultipartRelated` against a real envelope. Catches FR-DR-A-028
- *    regressions ("TypeError: Dicer is not a constructor") that vitest's
- *    transformer would mask because vitest reaches into the source via
- *    Rollup, not the published exports map.
+ *    `parseMultipartRelated` against a real envelope through Node's module
+ *    loaders rather than Vite's source transformer.
  *  - T-082: prove the `err.name` cross-format fallback documented in the
  *    README's Error handling section actually works. We construct
  *    `MultipartIdleTimeoutError` from the CJS bundle and assert `err.name`
@@ -83,7 +81,7 @@ describe.skipIf(distMissing)('cross-format consumer (T-052, T-072, T-082)', () =
   const SPAWN_TIMEOUT_MS = 30_000;
 
   it(
-    'T-052/T-072 CJS consumer: require + parseMultipartRelated yields parts (FR-DR-A-028)',
+    'T-052/T-072 CJS consumer: require + parseMultipartRelated yields parts',
     async () => {
       // The CRLF body is built inside the spawned process so we never depend
       // on tests/fixtures/* from inside a CJS file at /tmp.
@@ -130,16 +128,12 @@ describe.skipIf(distMissing)('cross-format consumer (T-052, T-072, T-082)', () =
       }
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('count:1');
-      // Belt-and-suspenders: prove the FR-DR-A-028 normalization didn't
-      // regress (would surface as 'Dicer is not a constructor').
-      expect(result.stderr).not.toMatch(/Dicer is not a constructor/);
-      expect(result.stdout).not.toMatch(/Dicer is not a constructor/);
     },
     SPAWN_TIMEOUT_MS,
   );
 
   it(
-    'T-052/T-072 ESM consumer: import + parseMultipartRelated yields parts (FR-DR-A-028)',
+    'T-052/T-072 ESM consumer: import + parseMultipartRelated yields parts',
     async () => {
       const script = `
         const m = await import(${JSON.stringify('file://' + distEsmAbs)});
@@ -181,8 +175,6 @@ describe.skipIf(distMissing)('cross-format consumer (T-052, T-072, T-082)', () =
       }
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('count:1');
-      expect(result.stderr).not.toMatch(/Dicer is not a constructor/);
-      expect(result.stdout).not.toMatch(/Dicer is not a constructor/);
     },
     SPAWN_TIMEOUT_MS,
   );

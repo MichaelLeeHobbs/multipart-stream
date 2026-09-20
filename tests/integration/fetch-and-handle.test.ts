@@ -24,11 +24,11 @@ import {
   type StreamingMultipartPart,
   streamToString,
 } from '../../src/index.js';
-import {
-  captureDicerActivity,
-  type DicerActivityTracker,
-} from '../fixtures/dicer-activity.js';
 import { buildMultipartBody } from '../fixtures/multipart-builders.js';
+import {
+  captureParserActivity,
+  type ParserActivityTracker,
+} from '../fixtures/parser-activity.js';
 import { startMultipartServer } from '../fixtures/start-multipart-server.js';
 
 const BOUNDARY = 'FETCH-BOUNDARY';
@@ -55,10 +55,10 @@ function buildThreePartEnvelope(): Buffer {
 }
 
 describe('fetchAndHandleMultipart — orchestration (T-006 / T-007 / T-008)', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
 
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
 
   afterEach(() => {
@@ -89,14 +89,14 @@ describe('fetchAndHandleMultipart — orchestration (T-006 / T-007 / T-008)', ()
       expect(result.status).toBe(200);
 
       // Listener-leak harness: every part stream was destroyed (drain-on-
-      // finally), and the dicer instance has zero 'part' / 'finish'
+      // finally), and the parser instance has zero 'part' / 'finish'
       // listeners but its 'error' listener is still attached (FR-011).
-      const dicers = tracker.dicerInstances();
-      expect(dicers.length).toBeGreaterThanOrEqual(1);
-      for (const dicer of dicers) {
-        expect(dicer.listenerCount('part')).toBe(0);
-        expect(dicer.listenerCount('finish')).toBe(0);
-        expect(dicer.listenerCount('error')).toBeGreaterThanOrEqual(1);
+      const parsers = tracker.parserInstances();
+      expect(parsers.length).toBeGreaterThanOrEqual(1);
+      for (const parser of parsers) {
+        expect(parser.listenerCount('part')).toBe(0);
+        expect(parser.listenerCount('finish')).toBe(0);
+        expect(parser.listenerCount('error')).toBeGreaterThanOrEqual(1);
       }
       for (const partStream of tracker.partStreams()) {
         expect(partStream.destroyed).toBe(true);
@@ -138,7 +138,7 @@ describe('fetchAndHandleMultipart — orchestration (T-006 / T-007 / T-008)', ()
         ...TIMEOUTS,
         parser: async (part: StreamingMultipartPart) => {
           seen += 1;
-          // Drain the body so dicer can advance to the next part on
+          // Drain the body so parser can advance to the next part on
           // every iteration but the throwing one.
           if (seen === 2) {
             throw new Error('boom');
@@ -149,12 +149,12 @@ describe('fetchAndHandleMultipart — orchestration (T-006 / T-007 / T-008)', ()
 
       await expect(op).rejects.toThrow(/boom/);
       // FR-010 cleanup ran: source destroyed, listeners cleaned, parts drained.
-      const dicers = tracker.dicerInstances();
-      expect(dicers.length).toBeGreaterThanOrEqual(1);
-      for (const dicer of dicers) {
-        expect(dicer.listenerCount('part')).toBe(0);
-        expect(dicer.listenerCount('finish')).toBe(0);
-        expect(dicer.listenerCount('error')).toBeGreaterThanOrEqual(1);
+      const parsers = tracker.parserInstances();
+      expect(parsers.length).toBeGreaterThanOrEqual(1);
+      for (const parser of parsers) {
+        expect(parser.listenerCount('part')).toBe(0);
+        expect(parser.listenerCount('finish')).toBe(0);
+        expect(parser.listenerCount('error')).toBeGreaterThanOrEqual(1);
       }
       for (const partStream of tracker.partStreams()) {
         expect(partStream.destroyed).toBe(true);

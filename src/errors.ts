@@ -106,7 +106,7 @@ export class MultipartAbortError extends Error {
 }
 
 /**
- * Thrown when the source stream ends without dicer observing the closing
+ * Thrown when the source stream ends without parser observing the closing
  * multipart boundary (FR-022) — typically a mid-flight server hangup or
  * transport-layer cut. Cleanup per FR-010 still runs.
  *

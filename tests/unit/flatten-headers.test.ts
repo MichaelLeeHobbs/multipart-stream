@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  flattenDicerHeaders,
   flattenHeaderValue,
+  flattenPartHeaders,
 } from '../../src/internal/flatten-headers.js';
 
 describe('flattenHeaderValue', () => {
@@ -41,13 +41,13 @@ describe('flattenHeaderValue', () => {
   });
 });
 
-describe('flattenDicerHeaders', () => {
+describe('flattenPartHeaders', () => {
   it('returns {} for undefined input', () => {
-    expect(flattenDicerHeaders(undefined)).toEqual({});
+    expect(flattenPartHeaders(undefined)).toEqual({});
   });
 
   it('lowercases keys and collapses values', () => {
-    const got = flattenDicerHeaders({
+    const got = flattenPartHeaders({
       'CONTENT-TYPE': ['application/json'],
       'Content-Id': ['<meta>'],
       'X-Custom': 'plain',
@@ -59,8 +59,8 @@ describe('flattenDicerHeaders', () => {
     });
   });
 
-  it('handles dicer 0.3.1 native shape (Record<string, string[]>)', () => {
-    const got = flattenDicerHeaders({
+  it('handles the internal parser header shape', () => {
+    const got = flattenPartHeaders({
       'content-type': ['text/plain'],
     });
     expect(got['content-type']).toBe('text/plain');

@@ -4,7 +4,7 @@
  *
  * Covers:
  *   - T-035: Content-Type: application/json → reject with FR-021 message;
- *     dicer NEVER constructed (harness count === 0).
+ *     parser NEVER constructed (harness count === 0).
  *   - T-036: case-insensitive — Content-Type: Multipart/Related → success.
  *   - T-067: 404 status + multipart-shaped body → still rejects per FR-021
  *     (status check is post-response; fail-fast still applies because
@@ -14,28 +14,28 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fetchAndHandleMultipart, streamToString } from '../../src/index.js';
-import {
-  captureDicerActivity,
-  type DicerActivityTracker,
-} from '../fixtures/dicer-activity.js';
 import { buildMultipartBody } from '../fixtures/multipart-builders.js';
+import {
+  captureParserActivity,
+  type ParserActivityTracker,
+} from '../fixtures/parser-activity.js';
 import { startMultipartServer } from '../fixtures/start-multipart-server.js';
 
 const BOUNDARY = 'CT-VALIDATION-BOUNDARY';
 const TIMEOUTS = { idleTimeoutMs: 5_000, totalTimeoutMs: 60_000 } as const;
 
 describe('fetchAndHandleMultipart — Content-Type validation (T-035 / T-036 / T-067)', () => {
-  let tracker: DicerActivityTracker;
+  let tracker: ParserActivityTracker;
 
   beforeEach(() => {
-    tracker = captureDicerActivity();
+    tracker = captureParserActivity();
   });
 
   afterEach(() => {
     tracker.restore();
   });
 
-  it('T-035: server returns application/json → rejects with FR-021 message; Dicer never constructed', async () => {
+  it('T-035: server returns application/json → rejects with FR-021 message; Parser never constructed', async () => {
     const server = await startMultipartServer({
       status: 200,
       contentType: 'application/json',
@@ -50,8 +50,8 @@ describe('fetchAndHandleMultipart — Content-Type validation (T-035 / T-036 / T
       await expect(op).rejects.toThrow(
         /multipart: response Content-Type is not multipart\/related; got "application\/json"/,
       );
-      // Fail-fast: dicer was NEVER constructed on this path.
-      expect(tracker.dicerInstances().length).toBe(0);
+      // Fail-fast: parser was NEVER constructed on this path.
+      expect(tracker.parserInstances().length).toBe(0);
     } finally {
       await server.close();
     }
@@ -95,7 +95,7 @@ describe('fetchAndHandleMultipart — Content-Type validation (T-035 / T-036 / T
       await expect(op).rejects.toThrow(
         /multipart: response Content-Type is not multipart\/related; got "application\/json"/,
       );
-      expect(tracker.dicerInstances().length).toBe(0);
+      expect(tracker.parserInstances().length).toBe(0);
     } finally {
       await server.close();
     }
@@ -119,7 +119,7 @@ describe('fetchAndHandleMultipart — Content-Type validation (T-035 / T-036 / T
       await expect(op).rejects.toThrow(
         /multipart: response Content-Type is not multipart\/related/,
       );
-      expect(tracker.dicerInstances().length).toBe(0);
+      expect(tracker.parserInstances().length).toBe(0);
     } finally {
       await server.close();
     }
@@ -140,7 +140,7 @@ describe('fetchAndHandleMultipart — Content-Type validation (T-035 / T-036 / T
       await expect(op).rejects.toThrow(
         /multipart: response Content-Type is not multipart\/related; got "text\/plain"/,
       );
-      expect(tracker.dicerInstances().length).toBe(0);
+      expect(tracker.parserInstances().length).toBe(0);
     } finally {
       await server.close();
     }
