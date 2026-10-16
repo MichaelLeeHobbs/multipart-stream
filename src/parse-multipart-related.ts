@@ -499,7 +499,19 @@ async function* parseMultipartRelatedImpl(
     timers.resetIdle();
   };
 
+  // Retained after cleanup, like onParserError (FR-011). A source destroyed
+  // WITH an error (e.g. undici erroring an aborted fetch body, forwarded by
+  // Readable.fromWeb) can emit 'error' on a tick after the generator has
+  // closed; with no listener attached Node would raise uncaughtException.
   const onSourceError = (err: Error): void => {
+    if (cleaned) {
+      logger({
+        level: 'warn',
+        msg: 'multipart: late source error after generator close',
+        meta: { errSummary: summarizeError(err) },
+      });
+      return;
+    }
     queue.signalError(err);
   };
 
@@ -547,9 +559,12 @@ async function* parseMultipartRelatedImpl(
 
     // (1) Remove the listeners we attached to the source. Removing by
     //     reference lets us coexist with any listeners the caller (or
-    //     downstream layers) may have attached.
+    //     downstream layers) may have attached. INTENTIONALLY do NOT remove
+    //     the source 'error' listener — same contract as the parser's
+    //     (FR-011, see step 5): a late-tick source error must be logged,
+    //     not escape as an uncaughtException.
     source.off('data', onSourceData);
-    source.off('error', onSourceError);
+    // source.off('error', onSourceError);  ← deliberately left attached
     source.off('end', onSourceEnd);
 
     // (2) Try to unpipe — wrap in a logged catch (FR-017 silent-catch
