@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -139,6 +139,96 @@ describe('parseMultipartRelated — FR-011 late-emit parser error path (T-016)',
     await expect(iter.next()).rejects.toThrow();
     // The error surfaced via the queue (NOT via the late-emit logger
     // path) because cleanup had not yet run.
+    expect(logger).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseMultipartRelated — late source error after cleanup (issue #3)', () => {
+  /**
+   * A source whose `_destroy` completes on a later tick, so `'error'` is
+   * emitted AFTER the generator's cleanup has run. This mirrors undici /
+   * `Readable.fromWeb`: an aborted fetch body is destroyed with the abort
+   * reason, but the `'error'` event lands asynchronously.
+   */
+  function deferredErrorSource(buf: Buffer): Readable {
+    let pushed = false;
+    return new Readable({
+      read() {
+        if (!pushed) {
+          pushed = true;
+          this.push(buf);
+        }
+      },
+      destroy(err, cb) {
+        setImmediate(() => {
+          cb(err);
+        });
+      },
+    });
+  }
+
+  it('retains the source error listener and routes a post-cleanup source error through logger.warn', async () => {
+    const buf = buildMultipartBody({
+      boundary: BOUNDARY,
+      parts: [
+        { headers: { 'Content-Type': 'text/plain' }, body: 'one' },
+        { headers: { 'Content-Type': 'text/plain' }, body: 'two' },
+      ],
+    });
+    const source = deferredErrorSource(buf);
+    const loggerEvents: LoggerEvent[] = [];
+    const logger = vi.fn((event: LoggerEvent) => {
+      loggerEvents.push(event);
+    });
+    const uncaught = vi.fn();
+    process.on('uncaughtException', uncaught);
+
+    try {
+      for await (const part of parseMultipartRelated(source, {
+        ...TIMEOUTS,
+        boundary: BOUNDARY,
+        logger,
+      })) {
+        await streamToString(part.body);
+        // Source is destroyed WITH an error while the consumer is still
+        // iterating; its 'error' event is deferred past cleanup().
+        const lateErr = new Error('late source error');
+        lateErr.name = 'LateSourceError';
+        source.destroy(lateErr);
+        break;
+      }
+
+      // cleanup() has run. The library's listener must still be attached.
+      expect(source.listenerCount('error')).toBeGreaterThanOrEqual(1);
+
+      // Let the deferred _destroy callback fire and 'error' be emitted.
+      await settle();
+      await settle();
+
+      expect(uncaught).not.toHaveBeenCalled();
+      const lateCalls = loggerEvents.filter((e) =>
+        e.msg.includes('late source error after generator close'),
+      );
+      expect(lateCalls).toHaveLength(1);
+      const meta = lateCalls[0]!.meta as Record<string, unknown>;
+      expect(Object.keys(meta)).toEqual(['errSummary']);
+      expect((meta.errSummary as { name: string }).name).toBe('LateSourceError');
+    } finally {
+      process.off('uncaughtException', uncaught);
+    }
+  });
+
+  it('PRE-cleanup source errors still route to the queue', async () => {
+    const source = new PassThrough();
+    const logger = vi.fn();
+    const iter = parseMultipartRelated(source, {
+      ...TIMEOUTS,
+      boundary: BOUNDARY,
+      logger,
+    });
+    const pending = iter.next();
+    source.destroy(new Error('early source error'));
+    await expect(pending).rejects.toThrow('early source error');
     expect(logger).not.toHaveBeenCalled();
   });
 });
