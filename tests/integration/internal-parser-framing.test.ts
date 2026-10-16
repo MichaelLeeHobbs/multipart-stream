@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 
 import { describe, expect, it } from 'vitest';
 
@@ -103,5 +103,58 @@ describe('internal multipart framing', () => {
       bodies.push(await streamToBuffer(part.body));
     }
     expect(bodies).toEqual([Buffer.from('body')]);
+  });
+
+  // A confirmed delimiter must end the current part immediately, even when the
+  // source then stalls. streamsearch holds back trailing bytes that could
+  // start another needle, and the delimiter's own CRLF is such a prefix, so the
+  // part used to stay open until unrelated later bytes (or EOF) arrived.
+  describe.each([
+    ['next-part delimiter', `\r\n--${boundary}\r\n`],
+    ['closing delimiter', `\r\n--${boundary}--\r\n`],
+  ])('ends the part on a %s while the source stalls', (_name, tail) => {
+    it.each([1, 2, 3, tail.length])('with %i-byte tail chunks', async (size) => {
+      const source = new PassThrough();
+      source.write(Buffer.from(`--${boundary}\r\nContent-Type: text/plain\r\n\r\nbody`));
+      for (let i = 0; i < tail.length; i += size) {
+        source.write(Buffer.from(tail.slice(i, i + size)));
+      }
+      // Deliberately never end the source.
+
+      const iterator = parseMultipartRelated(source, { ...timeouts, boundary })[
+        Symbol.asyncIterator
+      ]();
+      try {
+        const first = await iterator.next();
+        if (first.done) throw new Error('Missing first part');
+        const outcome = await Promise.race([
+          streamToBuffer(first.value.body),
+          new Promise<'stalled'>((resolve) => {
+            setTimeout(() => {
+              resolve('stalled');
+            }, 300);
+          }),
+        ]);
+        expect(outcome).toEqual(Buffer.from('body'));
+      } finally {
+        await iterator.return(undefined);
+      }
+    });
+  });
+
+  it('keeps a near-miss closing marker in the body while it is still ambiguous', async () => {
+    // `--` after the needle is only a close once CRLF or EOF follows; until
+    // then it may be `--junk` body data, so the part must stay open.
+    const source = new PassThrough();
+    source.write(Buffer.from(`--${boundary}\r\n\r\nbody\r\n--${boundary}--`));
+    const iterator = parseMultipartRelated(source, { ...timeouts, boundary })[
+      Symbol.asyncIterator
+    ]();
+    const first = await iterator.next();
+    if (first.done) throw new Error('Missing first part');
+    const body = streamToBuffer(first.value.body);
+    source.end(Buffer.from(`junk\r\n--${boundary}--\r\n`));
+    expect(await body).toEqual(Buffer.from(`body\r\n--${boundary}--junk`));
+    expect((await iterator.next()).done).toBe(true);
   });
 });
