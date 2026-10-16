@@ -8,6 +8,7 @@ const HEADER_END = Buffer.from('\r\n\r\n');
 const INITIAL_CRLF = Buffer.from('\r\n');
 const CLOSING_DASHES = Buffer.from('--');
 const CLOSING_CR = Buffer.from('--\r');
+const CLOSING_CRLF = Buffer.from('--\r\n');
 // Keep header accumulation bounded before the caller's configured cap can run.
 const MAX_HEADER_BYTES = 80 * 1024;
 const MAX_HEADER_PAIRS = 2_000;
@@ -72,12 +73,21 @@ export class MultipartParser extends Writable {
   private pendingWrite: (() => void) | undefined;
   private openParts = 0;
   private finalCallback: ((error?: Error) => void) | undefined;
+  // streamsearch holds back trailing input that could start another needle,
+  // which includes a delimiter's own CRLF. `pushed - reported` is the size of
+  // that held-back run, and it is always the end of the input, so a copy of
+  // the last `needle.length` input bytes lets peekDelimiter() see it.
+  private pushed = 0;
+  private reported = 0;
+  private tail = Buffer.alloc(0);
 
   constructor(boundary: string) {
     super();
     if (boundary.length === 0) throw new TypeError('Boundary required');
     this.needle = Buffer.from(`\r\n--${boundary}`);
     this.search = new StreamSearch(this.needle, (matched, data, start, end, safe) => {
+      if (data) this.reported += end - start;
+      if (matched) this.reported += this.needle.length;
       if (this.state !== 'done' && data && start < end) {
         const chunk = data.subarray(start, end);
         this.consume(safe ? chunk : Buffer.from(chunk));
@@ -89,7 +99,7 @@ export class MultipartParser extends Writable {
       }
     });
     // The first boundary may begin at byte zero; later boundaries require CRLF.
-    this.search.push(INITIAL_CRLF);
+    this.pushInput(INITIAL_CRLF);
   }
 
   override _write(
@@ -98,7 +108,8 @@ export class MultipartParser extends Writable {
     callback: (error?: Error | null) => void,
   ): void {
     try {
-      this.search.push(chunk);
+      this.pushInput(chunk);
+      this.peekDelimiter();
       if (this.pausedPart) this.pendingWrite = callback;
       else callback();
     } catch (error) {
@@ -126,6 +137,36 @@ export class MultipartParser extends Writable {
     }
     if (this.openParts === 0) callback();
     else this.finalCallback = callback;
+  }
+
+  private pushInput(chunk: Buffer): void {
+    const keep = this.needle.length;
+    this.tail =
+      chunk.length >= keep
+        ? Buffer.from(chunk.subarray(chunk.length - keep))
+        : Buffer.concat([this.tail, chunk]).subarray(-keep);
+    this.pushed += chunk.length;
+    this.search.push(chunk);
+  }
+
+  /**
+   * Ends the current part as soon as its delimiter is confirmed (`CRLF` for
+   * the next part, `--CRLF` for the close), even if those bytes are still held
+   * by streamsearch. State transitions still happen when the bytes are
+   * reported; endPart() is idempotent. A bare `--` stays ambiguous (it may be
+   * `--junk` body data) until CRLF or EOF arrives.
+   */
+  private peekDelimiter(): void {
+    if (!this.candidate || this.state !== 'body' || this.part === undefined) return;
+    const held = this.pushed - this.reported;
+    const pending = Buffer.concat([
+      this.suffix,
+      held > 0 ? this.tail.subarray(this.tail.length - held) : Buffer.alloc(0),
+    ]);
+    const confirmed =
+      pending.subarray(0, 2).equals(INITIAL_CRLF) ||
+      pending.subarray(0, 4).equals(CLOSING_CRLF);
+    if (confirmed) this.endPart();
   }
 
   private resumeWrite(part: MultipartPartStream): void {
