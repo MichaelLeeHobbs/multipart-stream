@@ -49,13 +49,9 @@ import { truncateForErrorEmbed } from './internal/format-error-embed.js';
  *   extractBoundary('multipart/related; type="application/dicom"; BOUNDARY=BAR; charset=utf-8');
  *   // 'BAR'
  */
-export function extractBoundary(
-  contentTypeHeader: string | null | undefined,
-): string {
+export function extractBoundary(contentTypeHeader: string | null | undefined): string {
   if (contentTypeHeader == null || contentTypeHeader === '') {
-    throw new Error(
-      'multipart: Content-Type header is required to extract boundary',
-    );
+    throw new Error('multipart: Content-Type header is required to extract boundary');
   }
 
   const header = contentTypeHeader;
@@ -123,14 +119,13 @@ export function extractBoundary(
 
     // Value: either a quoted-string ("...", with `\` escapes) or a bare token
     // up to the next `;`/whitespace.
-    let value = '';
+    let value: string;
     if (i < len && header.charCodeAt(i) === 0x22 /* " */) {
       // Quoted string. Single-pass scan; never backtracks. The cost on a
       // 64 KiB pathological input (T-080) is O(n) regardless of escape
       // density — that's the whole point of NOT using a regex here.
       i++; // consume opening quote
       const buf: string[] = [];
-      let closed = false;
       while (i < len) {
         const c = header.charCodeAt(i);
         if (c === 0x5c /* \ */ && i + 1 < len) {
@@ -140,7 +135,6 @@ export function extractBoundary(
           continue;
         }
         if (c === 0x22 /* " */) {
-          closed = true;
           i++;
           break;
         }
@@ -151,7 +145,6 @@ export function extractBoundary(
       // we got rather than throwing — extractBoundary's failure modes are
       // about missing/empty boundary, not malformed framing. The downstream
       // parser call will raise on a bad boundary anyway.
-      void closed;
       value = buf.join('');
     } else {
       // Bare token — read until `;` / whitespace / EOL.
@@ -180,8 +173,6 @@ export function extractBoundary(
   }
 
   throw new Error(
-    `multipart: boundary parameter missing from Content-Type: ${truncateForErrorEmbed(
-      header,
-    )}`,
+    `multipart: boundary parameter missing from Content-Type: ${truncateForErrorEmbed(header)}`,
   );
 }

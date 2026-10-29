@@ -44,16 +44,13 @@ export interface NormalizeOptions {
 }
 
 /**
- * Detect a Web `Response` without depending on the global `Response`
- * constructor for `instanceof` checks (Node 20.18+ has it, but defensive
- * duck-typing covers test fixtures that emulate the shape).
+ * Detect a Web `Response` by shape rather than `instanceof Response`, so test
+ * fixtures and other fetch implementations that emulate it are accepted (a
+ * real `Response` always matches the shape).
  *
  * @internal
  */
 function looksLikeResponse(input: unknown): input is Response {
-  if (typeof Response !== 'undefined' && input instanceof Response) {
-    return true;
-  }
   if (input == null || typeof input !== 'object') return false;
   const candidate = input as { headers?: { get?: unknown }; body?: unknown };
   return (

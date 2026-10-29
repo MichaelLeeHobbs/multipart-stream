@@ -78,17 +78,16 @@ function parseHeaders(block: Buffer, maxPairs: number): PartHeaders {
   const headers: PartHeaders = Object.create(null) as PartHeaders;
   if (block.length === 0) return headers;
   const lines = block.toString('latin1').split('\r\n');
-  let previousName: string | undefined;
+  // The values array of the last header line, which a folded line extends.
+  let previousValues: string[] | undefined;
   let count = 0;
 
   for (const line of lines) {
     if (line.startsWith(' ') || line.startsWith('\t')) {
-      if (previousName === undefined) {
+      if (previousValues === undefined) {
         throw new Error('Unexpected folded header value');
       }
-      const values = headers[previousName];
-      if (values === undefined) throw new Error('Malformed part header');
-      values[values.length - 1] += line;
+      previousValues[previousValues.length - 1] += line;
       continue;
     }
 
@@ -102,9 +101,9 @@ function parseHeaders(block: Buffer, maxPairs: number): PartHeaders {
     if (/[\x00-\x08\x0a-\x1f\x7f]/.test(value)) {
       throw new Error('Malformed part header');
     }
-    const key = name.toLowerCase();
-    (headers[key] ??= []).push(value);
-    previousName = key;
+    const values = (headers[name.toLowerCase()] ??= []);
+    values.push(value);
+    previousValues = values;
     count++;
   }
   // The block is already bounded by maxHeaderBytes, so count it in full and
@@ -182,7 +181,6 @@ export class MultipartParser extends Writable {
       return;
     }
     if (this.candidate && classifyDelimiter(this.suffix, true).kind === 'close') {
-      this.candidate = false;
       this.endPart();
       this.state = 'done';
     }
@@ -216,10 +214,7 @@ export class MultipartParser extends Writable {
   private peekDelimiter(): void {
     if (!this.candidate || this.state !== 'body' || this.part === undefined) return;
     const held = this.pushed - this.reported;
-    const pending = Buffer.concat([
-      this.suffix,
-      held > 0 ? this.tail.subarray(this.tail.length - held) : Buffer.alloc(0),
-    ]);
+    const pending = Buffer.concat([this.suffix, this.tail.subarray(this.tail.length - held)]);
     const { kind } = classifyDelimiter(pending, false);
     if (kind === 'next' || kind === 'close') this.endPart();
   }

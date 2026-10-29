@@ -162,14 +162,10 @@ export function setupTimers(opts: TimerStateOptions, startMs: number): TimerStat
   function runCleanup(): void {
     if (cleaned) return;
     cleaned = true;
-    if (idleTimer !== undefined) {
-      clearTimeout(idleTimer);
-      idleTimer = undefined;
-    }
-    if (totalTimer !== undefined) {
-      clearTimeout(totalTimer);
-      totalTimer = undefined;
-    }
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
+    clearTimeout(totalTimer);
+    totalTimer = undefined;
     if (callerSignal !== undefined) {
       callerSignal.removeEventListener('abort', onCallerAbort);
     }
@@ -178,16 +174,14 @@ export function setupTimers(opts: TimerStateOptions, startMs: number): TimerStat
   let idleStopped = false;
   const resetIdle = (): void => {
     if (cleaned || idleStopped || controller.signal.aborted) return;
-    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    clearTimeout(idleTimer);
     idleTimer = setTimeout(onIdle, opts.idleTimeoutMs);
   };
 
   const stopIdle = (): void => {
     idleStopped = true;
-    if (idleTimer !== undefined) {
-      clearTimeout(idleTimer);
-      idleTimer = undefined;
-    }
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
   };
 
   // FR-009 already-aborted check: if the caller signal is aborted at call

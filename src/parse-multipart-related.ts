@@ -274,7 +274,7 @@ async function* parseMultipartRelatedImpl(
     for (const [stream, origin] of allPartStreams) {
       if (!origin.complete && !stream.destroyed) stream.destroy(publicErr);
     }
-    if (!source.destroyed) source.destroy();
+    source.destroy();
   };
 
   // 4b. Composite abort plumbing (FR-007/FR-008/FR-009/FR-DR-A-025/
@@ -463,14 +463,12 @@ async function* parseMultipartRelatedImpl(
         meta: { errSummary: summarizeError(err) },
       });
     }
-    if (!source.destroyed) source.destroy();
+    source.destroy();
 
     // Destroy every body the consumer did not finish — yielded or not — so
     // no part's buffered chunks outlive the iterator (architecture.md §5.3).
     for (const part of queue.drainPendingParts()) part.body.destroy();
-    for (const stream of allPartStreams.keys()) {
-      if (!stream.destroyed) stream.destroy();
-    }
+    for (const stream of allPartStreams.keys()) stream.destroy();
     allPartStreams.clear();
 
     parser.off('part', onPart);

@@ -119,7 +119,7 @@ function collect(
   stringEncoding: BufferEncoding,
 ): Promise<Buffer> {
   const cap = options.maxBytes;
-  if (cap !== undefined && (typeof cap !== 'number' || !Number.isSafeInteger(cap) || cap < 1)) {
+  if (cap !== undefined && (!Number.isSafeInteger(cap) || cap < 1)) {
     throw new TypeError(`${label}: maxBytes must be a positive safe integer when set`);
   }
   return new Promise<Buffer>((resolve, reject) => {
@@ -132,7 +132,7 @@ function collect(
       readable.off('data', onData);
       stopWatching();
       if (err !== null) reject(err);
-      else resolve(chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks));
+      else resolve(Buffer.concat(chunks));
     };
     const abandon = (err: Error): void => {
       settle(err);
