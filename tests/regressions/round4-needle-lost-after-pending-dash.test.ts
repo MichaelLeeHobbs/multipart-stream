@@ -44,3 +44,24 @@ describe('pending "-" suffix followed by another needle match', () => {
     expect(await collect(env)).toEqual([first, 'second']);
   });
 });
+
+describe('a pending suffix that the next match settles as a delimiter', () => {
+  const opts = { boundary: 'b', idleTimeoutMs: 1000, totalTimeoutMs: 2000 } as const;
+  const run = async (env: string): Promise<string[]> => {
+    const bodies: string[] = [];
+    for await (const part of parseMultipartRelated(Readable.from([Buffer.from(env)]), opts)) {
+      bodies.push(await streamToString(part.body));
+    }
+    return bodies;
+  };
+
+  it('ends at a close delimiter followed at once by the needle', async () => {
+    await expect(run('--b\r\n\r\nx\r\n--b--\r\n--b\r\nepilogue')).resolves.toEqual(['x']);
+  });
+
+  it('starts the next part after padding, so the needle text is its header line', async () => {
+    await expect(run('--b\r\n\r\nx\r\n--b  \r\n--b\r\n\r\ny\r\n--b--')).rejects.toThrow(
+      'Malformed part header',
+    );
+  });
+});
