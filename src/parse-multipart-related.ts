@@ -1,45 +1,33 @@
 /**
  * `parseMultipartRelated` — streaming parser adapter. FR-001.
  *
- * Resource-cap enforcement (NFR-DR-S-001/004/012):
- *   - `maxPartBytes` (NFR-DR-S-001): each per-part body Readable gets a
- *     'data' listener that increments a per-part byte counter; on overflow
- *     the listener pushes `MultipartPartTooLargeError` into the queue and
- *     destroys the offending part body. No default — when undefined, no
- *     cap is enforced.
- *   - `maxParts` (NFR-DR-S-012): the parser 'part' counter is checked at
- *     each emit; on overflow, push `MultipartTooManyPartsError`. Default
- *     `10_000` when undefined.
- *   - `maxHeadersPerPart` + `maxHeaderBytesPerPart` (NFR-DR-S-004): on
- *     each per-part 'header' event, count headers and sum the byte length
- *     of `name + ': ' + value + '\r\n'` framing for every header line; on
- *     overflow, push `MultipartHeadersTooLargeError`. Defaults: count=100,
- *     bytes=16384 (16 KiB).
+ * Resource caps (NFR-DR-S-001/004/012), all validated as positive safe
+ * integers when set:
+ *   - `maxPartBytes`: the public body is a counting Transform piped from the
+ *     parser's part stream (backpressure intact); overflow errors the body
+ *     with `MultipartPartTooLargeError`. No default.
+ *   - `maxParts`: checked on every parser 'part' emit. Default `10_000`.
+ *   - `maxHeadersPerPart` / `maxHeaderBytesPerPart`: enforced inside the
+ *     parser while the header block accumulates, surfaced as
+ *     `MultipartHeadersTooLargeError`. Defaults 100 / 16 KiB.
  *
- * Timer + abort machinery (FR-006/FR-007/FR-008/FR-009/FR-DR-A-025/
- * FR-DR-A-026):
- *   - `validatePositiveTimeout` calls at the top of the generator enforce
- *     the FR-006 / JC-3 contract (both timeouts REQUIRED, both validated
- *     against `[1, 2^31-1]`).
- *   - `setupTimers(...)` constructs the composite abort signal aggregating
- *     idle, total, and caller-supplied AbortSignal — one source of truth
- *     for all three. The signal listens for any of those firing and pushes
- *     the right error class into the queue.
- *   - The per-chunk source `'data'` listener resets the idle timer
- *     (FR-DR-A-025 — onProgress is NOT used for this).
- *   - The cleanup function calls `timers.cleanup()` — same idempotent
- *     `cleaned` flag.
- *   - Already-aborted callers short-circuit on first `.next()` per FR-009.
+ * Timers (FR-006..FR-009, FR-DR-A-025/026): `setupTimers` aggregates idle,
+ * total and the caller's AbortSignal into one signal. The idle timer resets
+ * on every source chunk and stops when the source ends.
  *
- * Cleanup contract: the `finally` cleanup drains unyielded part bodies
- * (FR-010), removes 'data'/'error'/'end' listeners on source and 'part'/
- * 'finish' on parser, unpipes + destroys source, and KEEPS parser's 'error'
- * listener for late-emit observability (FR-011). Truncation detection
- * (FR-022) fires when source 'end' arrives without parser 'finish' having
- * fired.
+ * Failure: every terminal error (timeout, abort, truncation, source/parser
+ * error, cap overflow) goes through one `fail` path that queues it for the
+ * next `.next()` AND destroys every incomplete part body with it, so a
+ * consumer blocked on `part.body` is woken. Truncation (FR-022) is decided
+ * by the parser at end of input and surfaced as `MultipartTruncatedError`.
+ *
+ * Cleanup (FR-010): the `finally` destroys unfinished part bodies, removes
+ * the source/parser listeners, unpipes and destroys the source, and KEEPS
+ * the parser and source 'error' listeners so late errors are logged
+ * (FR-011).
  */
 
-import { PassThrough, type Readable } from 'node:stream';
+import { pipeline, type Readable, Transform } from 'node:stream';
 
 import {
   MultipartAbortError,
@@ -52,19 +40,17 @@ import { defaultLogger } from './internal/default-logger.js';
 import { flattenPartHeaders } from './internal/flatten-headers.js';
 import { summarizeError } from './internal/format-error-embed.js';
 import {
+  HeaderLimitError,
   MultipartParser,
   type MultipartPartStream,
   type PartHeaders,
+  UnexpectedEndError,
 } from './internal/multipart-parser.js';
 import { normalizeInput } from './internal/normalize-input.js';
 import { createQueueNotifier } from './internal/queue-notifier.js';
 import { setupTimers } from './internal/timers.js';
-import { validatePositiveTimeout } from './internal/validate-timeout.js';
-import type {
-  Logger,
-  ParseMultipartOptions,
-  StreamingMultipartPart,
-} from './types.js';
+import { validateOptionalCap, validatePositiveTimeout } from './internal/validate-timeout.js';
+import type { Logger, ParseMultipartOptions, StreamingMultipartPart } from './types.js';
 
 /**
  * Parse a `multipart/related` envelope as a typed async-iterator of
@@ -124,7 +110,22 @@ export function parseMultipartRelated(
   input: Response | Readable,
   opts: ParseMultipartOptions,
 ): AsyncGenerator<StreamingMultipartPart, void, void> {
-  return parseMultipartRelatedImpl(input, opts);
+  return parseMultipartRelatedFrom(input, opts, Date.now());
+}
+
+/**
+ * {@link parseMultipartRelated} with the `totalTimeoutMs` budget measured
+ * from `startMs` instead of the call, so `fetchAndHandleMultipart` can
+ * count the time spent waiting for response headers.
+ *
+ * @internal
+ */
+export function parseMultipartRelatedFrom(
+  input: Response | Readable,
+  opts: ParseMultipartOptions,
+  startMs: number,
+): AsyncGenerator<StreamingMultipartPart, void, void> {
+  return parseMultipartRelatedImpl(input, opts, startMs);
 }
 
 // The async generator below is intentionally one function — see the
@@ -135,47 +136,76 @@ export function parseMultipartRelated(
 // listeners before pipe" invariant.
 async function* parseMultipartRelatedImpl(
   input: Response | Readable,
-  opts: ParseMultipartOptions,
+  callerOpts: ParseMultipartOptions,
+  startMs: number,
 ): AsyncGenerator<StreamingMultipartPart, void, void> {
+  // A missing options bag reads as empty, so it fails the timeout checks
+  // below with their documented message.
+  const opts: Partial<ParseMultipartOptions> = callerOpts ?? {};
   // 1. Synchronous validation (FR-004 + FR-006/JC-3). Async generators
-  //    cannot truly throw at construction time per the vitest contract
-  //    (T-002/T-003/T-025 expectations) — every throw here surfaces from
-  //    the first `.next()`.
+  //    cannot truly throw at construction time — every throw here surfaces
+  //    from the first `.next()`.
   //
-  //    Validate timeouts FIRST, before any input normalization, so callers
-  //    who pass an invalid timeout get the precise NFR-DR-S-009 message
-  //    even if their input is also malformed. Both timeouts must be present
-  //    AND in the inclusive range [1, 2^31-1] (validatePositiveTimeout
-  //    handles the missing-value case via the same TypeError path).
-  validatePositiveTimeout('idleTimeoutMs', opts.idleTimeoutMs);
-  validatePositiveTimeout('totalTimeoutMs', opts.totalTimeoutMs);
+  //    Every option is read exactly once, here, so values stay fixed for
+  //    the duration of the operation and a throwing getter surfaces from
+  //    the first `.next()` instead of inside a stream listener. Timeouts are
+  //    validated FIRST so callers get the precise NFR-DR-S-009 message even
+  //    if their input is also malformed.
+  const idleTimeoutMs = opts.idleTimeoutMs;
+  const totalTimeoutMs = opts.totalTimeoutMs;
+  validatePositiveTimeout('idleTimeoutMs', idleTimeoutMs);
+  validatePositiveTimeout('totalTimeoutMs', totalTimeoutMs);
 
-  // Resolve resource-cap defaults at validation time so the values stay
-  // fixed for the duration of the operation (avoid race conditions where
-  // opts mutates between listener fires). Per kiln/spec/api.md §2 and
-  // review-security.md F-S-001/004/012:
+  // Resource caps (kiln/spec/api.md §2, review-security.md F-S-001/004/012):
   //   - maxPartBytes: undefined => no cap (NFR-DR-S-001).
   //   - maxParts: undefined => default 10_000 (NFR-DR-S-012).
   //   - maxHeadersPerPart: undefined => default 100 (NFR-DR-S-004).
   //   - maxHeaderBytesPerPart: undefined => default 16_384 (NFR-DR-S-004).
-  // The numeric defaults defend against attacker-controlled inputs even
-  // when callers omit the fields entirely.
-  const maxPartBytes = opts.maxPartBytes;
-  const maxParts = opts.maxParts ?? 10_000;
-  const maxHeadersPerPart = opts.maxHeadersPerPart ?? 100;
-  const maxHeaderBytesPerPart = opts.maxHeaderBytesPerPart ?? 16_384;
+  const maxPartBytes = validateOptionalCap('maxPartBytes', opts.maxPartBytes);
+  const maxParts = validateOptionalCap('maxParts', opts.maxParts) ?? 10_000;
+  const maxHeadersPerPart = validateOptionalCap('maxHeadersPerPart', opts.maxHeadersPerPart) ?? 100;
+  const maxHeaderBytesPerPart =
+    validateOptionalCap('maxHeaderBytesPerPart', opts.maxHeaderBytesPerPart) ?? 16_384;
+  const callerSignal = opts.signal;
+  const onProgress = opts.onProgress;
 
-  const { readable: source, boundary } = normalizeInput(input, {
-    boundary: opts.boundary,
+  // 2. Logger fallback (FR-018 / JC-2). A logger that throws must not escape
+  //    from a stream listener, so its failure is reported to the default
+  //    sink instead.
+  const callerLogger = opts.logger;
+  const logger: Logger =
+    callerLogger === undefined
+      ? defaultLogger
+      : (event) => {
+          try {
+            callerLogger(event);
+          } catch (err) {
+            defaultLogger({
+              level: 'warn',
+              msg: 'multipart: logger threw',
+              meta: { event: event.msg, errSummary: summarizeError(err) },
+            });
+          }
+        };
+
+  let normalized: ReturnType<typeof normalizeInput>;
+  try {
+    normalized = normalizeInput(input, { boundary: opts.boundary });
+  } catch (err) {
+    // The input is unusable, but a Response body still holds a connection
+    // open until it is read or cancelled (US-007).
+    cancelResponseBody(input, logger);
+    throw err;
+  }
+  const { readable: source, boundary } = normalized;
+
+  // 3. Construct the internal parser. Header caps are enforced inside it,
+  //    while the block is accumulated, so an oversized block is rejected
+  //    before it is buffered.
+  const parser = new MultipartParser(boundary, {
+    maxHeaderPairs: maxHeadersPerPart,
+    maxHeaderBytes: maxHeaderBytesPerPart,
   });
-
-  // 2. Logger fallback (FR-018 / JC-2). Resolved here so the FR-017 catch
-  //    sites (onProgress + cleanup unpipe) and the FR-011 late-emit path
-  //    all share the same logger.
-  const logger: Logger = opts.logger ?? defaultLogger;
-
-  // 3. Construct the internal parser.
-  const parser = new MultipartParser(boundary);
 
   // 4. Queue+notifier bridge (Layer C internal).
   const queue = createQueueNotifier();
@@ -183,250 +213,170 @@ async function* parseMultipartRelatedImpl(
   // Operation state used by the listeners.
   let bytesReceived = 0;
   let nextPartIndex = 0;
-  let parserFinished = false;
+  let partsObserved = 0;
+  let sourceEnded = false;
   let cleaned = false;
-  // Set true when the abort came from the combined-signal handler so the
-  // cleanup function knows the queue already received the discriminated
-  // error — avoids double-pushing or racing with idle/total firings.
-  let abortPushed = false;
-  // Set of every per-part Readable parser has emitted. We need this in
-  // addition to queue.drainPendingParts() because a part may have been
-  // emitted on parser's 'part' event but NOT yet reached the per-part
-  // 'header' event (so it never made it into the queue). Cleanup must
-  // still destroy it — otherwise parser's per-part Readable buffers a
-  // chunk that is never freed (the silent-leak BRIEF flags).
-  const allPartStreams = new Set<MultipartPartStream | PassThrough>();
-  const startMs = Date.now();
+  // The first terminal error. Later errors are consequences of it (a
+  // destroyed source erroring, bodies failing with it) and are dropped.
+  let failure: Error | undefined;
+  // Every per-part Readable the parser emitted, plus each `maxPartBytes`
+  // counter. A part may be emitted on 'part' but never reach 'header' (so
+  // it never made it into the queue); cleanup must still destroy it —
+  // otherwise its buffered chunk is never freed (the silent leak BRIEF
+  // flags).
+  // Each entry maps to the parser part stream that feeds it.
+  const allPartStreams = new Map<Readable, MultipartPartStream>();
 
-  // 4b. Set up the composite abort plumbing (FR-007/FR-008/FR-009/
-  //     FR-DR-A-025/FR-DR-A-026). The TimerState aggregates idle, total, and
-  //     caller-supplied AbortSignal into a single signal. It MUST be
-  //     constructed BEFORE we attach our pre-pipe listeners and BEFORE we
-  //     pipe — the timers fire wallclock-based, so any listener added later
-  //     would miss synchronous fires. The combined-signal handler attached
-  //     below pushes the right error class into the queue.
+  // Translate the parser's internal errors into the public typed errors.
+  // The truncation error is memoized so the iterator and every failed body
+  // reject with the same instance.
+  let truncation: MultipartTruncatedError | undefined;
+  const toPublicError = (err: Error): Error => {
+    if (err instanceof UnexpectedEndError) {
+      truncation ??= new MultipartTruncatedError(bytesReceived);
+      return truncation;
+    }
+    if (err instanceof HeaderLimitError) {
+      return new MultipartHeadersTooLargeError({
+        limit: err.limit,
+        partIndex: nextPartIndex - 1,
+        cap: err.limit === 'count' ? maxHeadersPerPart : maxHeaderBytesPerPart,
+        observed: err.observed,
+      });
+    }
+    return err;
+  };
+
+  // Single terminal-error path for parser, source, part, cap, timeout and
+  // abort failures. Besides queueing the error for the next `.next()`, it
+  // fails every open part body with it: a consumer blocked reading
+  // `part.body` (e.g. inside `streamToBuffer`) is otherwise never woken,
+  // because cleanup only runs when the generator resumes (FR-007/FR-009).
+  const fail = (err: Error, origin: ErrorOrigin = 'operation'): void => {
+    if (cleaned) {
+      // FR-011: a late-tick error after the generator closed is logged,
+      // never thrown into an uncaughtException.
+      if (failure === undefined) {
+        logger({
+          level: 'warn',
+          msg: `multipart: late ${origin} error after generator close`,
+          meta: { errSummary: summarizeError(err) },
+        });
+      }
+      return;
+    }
+    if (failure !== undefined) return;
+    const publicErr = toPublicError(err);
+    failure = publicErr;
+    queue.signalError(publicErr);
+    // A body whose delimiter already arrived is complete and stays readable,
+    // so parts before the failure are still delivered intact.
+    for (const [stream, origin] of allPartStreams) {
+      if (!origin.complete && !stream.destroyed) stream.destroy(publicErr);
+    }
+    if (!source.destroyed) source.destroy();
+  };
+
+  // 4b. Composite abort plumbing (FR-007/FR-008/FR-009/FR-DR-A-025/
+  //     FR-DR-A-026): idle, total and the caller's AbortSignal aggregated
+  //     into one signal. Constructed BEFORE any listener is attached and
+  //     BEFORE the pipe so no fire is missed.
   const timers = setupTimers(
     {
-      idleTimeoutMs: opts.idleTimeoutMs,
-      totalTimeoutMs: opts.totalTimeoutMs,
-      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      idleTimeoutMs,
+      totalTimeoutMs,
+      ...(callerSignal !== undefined ? { signal: callerSignal } : {}),
     },
     startMs,
   );
-
-  // FR-009 already-aborted contract: when the caller signal is aborted at
-  // call time, the iterator's first `.next()` MUST reject synchronously
-  // with MultipartAbortError whose `.reason` is the caller-supplied reason
-  // verbatim. Push the error into the queue right now so the for-await
-  // loop below picks it up immediately. The MultipartAbortError instance
-  // was already constructed by setupTimers — we re-use it via abortError().
-  if (timers.signal.aborted) {
-    const abortErr =
-      timers.abortError() ?? new MultipartAbortError(opts.signal?.reason);
-    queue.signalError(abortErr);
-    abortPushed = true;
-  }
-
-  // Combined-signal handler — fires when ANY of idle/total/caller-abort
-  // trigger AFTER setupTimers returned. Same path used for source 'error'
-  // and parser 'error': push into queue, the for-await loop's
-  // item.type === 'error' branch surfaces it, and the iterator's `finally`
-  // runs cleanup() which also calls timers.cleanup(). The `cleaned` flag
-  // protects against late-fire pushes after cleanup ran first (e.g.
-  // success path that ran cleanup then a stray total-timer fire that
-  // setupTimers' own cleanup missed by a microtask).
   const onCombinedAbort = (): void => {
-    if (cleaned || abortPushed) return;
-    abortPushed = true;
-    const abortErr =
-      timers.abortError() ?? new MultipartAbortError(opts.signal?.reason);
-    queue.signalError(abortErr);
+    fail(timers.abortError() ?? new MultipartAbortError(callerSignal?.reason));
   };
-  // `{ once: true }` because the combined signal is one-shot — once it
-  // fires the controller can't fire again, but we still want to honor the
-  // contract that this listener never re-runs across cleanup boundaries.
-  if (!timers.signal.aborted) {
-    timers.signal.addEventListener('abort', onCombinedAbort, { once: true });
-  }
+  // FR-009: an already-aborted caller signal makes the first `.next()`
+  // reject with MultipartAbortError carrying the verbatim reason.
+  if (timers.signal.aborted) onCombinedAbort();
+  else timers.signal.addEventListener('abort', onCombinedAbort, { once: true });
 
-  const fireProgress = (): void => {
-    const callback = opts.onProgress;
-    if (callback === undefined) return;
+  const fireProgress = (completion: boolean): void => {
+    if (onProgress === undefined) return;
     const elapsedMs = Date.now() - startMs;
-    const rateBps =
-      elapsedMs <= 0 ? 0 : Math.round((bytesReceived * 1000) / elapsedMs);
+    const rateBps = elapsedMs <= 0 ? 0 : Math.round((bytesReceived * 1000) / elapsedMs);
     try {
-      callback({ bytes: bytesReceived, elapsedMs, rateBps });
+      onProgress({ bytes: bytesReceived, elapsedMs, rateBps });
     } catch (err) {
       // FR-017: NEVER silent-catch. Route through the configured logger.
       logger({
         level: 'warn',
-        msg: 'multipart: onProgress threw',
+        msg: completion
+          ? 'multipart: onProgress threw on completion tick'
+          : 'multipart: onProgress threw',
         meta: { errSummary: summarizeError(err) },
       });
     }
   };
 
-  // Running counter of parser 'part' emits. Compared against maxParts on
-  // every emit; once observed > cap, push the error and destroy the
-  // offending stream. Counts every emit including those past the cap so
-  // the surfaced `observed` value is accurate.
-  let partsObserved = 0;
-
-  // 5. Attach ALL listeners BEFORE pipe() (FR-012 / US-011). This is the
-  //    critical invariant — synchronous early errors from parser (e.g. a
-  //    malformed first byte producing an immediate 'error') must surface
-  //    via the queue rather than being lost.
+  // 5. Attach ALL listeners BEFORE pipe() (FR-012 / US-011) so synchronous
+  //    early errors surface via the queue rather than being lost.
   const onPart = (partStream: MultipartPartStream): void => {
     // The parser emits the part before its headers so this listener is ready.
-    allPartStreams.add(partStream);
+    allPartStreams.set(partStream, partStream);
     const partIndex = nextPartIndex++;
+    // Per-part 'error' bridge: without a listener, a body failed by `fail`
+    // would raise an uncaughtException when the consumer is not reading it.
+    partStream.on('error', (err: Error) => {
+      fail(err, 'part-stream');
+    });
 
-    // maxParts (NFR-DR-S-012). Trip when the (1-based) emit count
-    // exceeds the cap. We push the error and destroy the offending part
-    // stream; cleanup() handles the rest of the FR-010 work via the
-    // iterator's finally. We deliberately count BEFORE the cap check so
-    // observed === maxParts + 1 on the first overflow (the spec's
-    // expected value per `cap, observed` shape).
+    // maxParts (NFR-DR-S-012): observed === maxParts + 1 on first overflow.
     partsObserved += 1;
     if (partsObserved > maxParts) {
-      if (!partStream.destroyed) partStream.destroy();
-      queue.signalError(
-        new MultipartTooManyPartsError({
-          maxParts,
-          observed: partsObserved,
-        }),
-      );
+      fail(new MultipartTooManyPartsError({ maxParts, observed: partsObserved }));
       return;
     }
 
-    const headersAccumulator: { value: Record<string, string | undefined> } = {
-      value: {},
-    };
-
-    const onHeader = (raw: unknown, rawHeaderBlock: Buffer): void => {
-      // Count repeated values separately before flattening the header bag.
-      const bag = raw as PartHeaders | undefined;
-      let headerCount = 0;
-      if (bag !== undefined) {
-        for (const values of Object.values(bag)) headerCount += values.length;
-      }
-      const headerBytes = rawHeaderBlock.length;
-      if (headerCount > maxHeadersPerPart) {
-        if (!partStream.destroyed) partStream.destroy();
-        queue.signalError(
-          new MultipartHeadersTooLargeError({
-            limit: 'count',
-            partIndex,
-            cap: maxHeadersPerPart,
-            observed: headerCount,
-          }),
-        );
-        return;
-      }
-      if (headerBytes > maxHeaderBytesPerPart) {
-        if (!partStream.destroyed) partStream.destroy();
-        queue.signalError(
-          new MultipartHeadersTooLargeError({
-            limit: 'bytes',
-            partIndex,
-            cap: maxHeaderBytesPerPart,
-            observed: headerBytes,
-          }),
-        );
-        return;
-      }
-
-      headersAccumulator.value = flattenPartHeaders(
-        raw as Record<string, unknown> | undefined,
-      );
-      const headers = headersAccumulator.value;
+    partStream.once('header', (raw: PartHeaders, rawHeaderBlock: Buffer) => {
+      const headers = flattenPartHeaders(raw);
       const contentType = headers['content-type'] ?? '';
       const contentId = headers['content-id'];
-      const contentLengthRaw = headers['content-length'];
-      const parsedLen =
-        contentLengthRaw !== undefined
-          ? Number.parseInt(contentLengthRaw, 10)
+      const contentLengthRaw = headers['content-length']?.trim();
+      const parsedLength =
+        contentLengthRaw !== undefined && /^\d+$/.test(contentLengthRaw)
+          ? Number(contentLengthRaw)
           : Number.NaN;
-      const contentLength = Number.isFinite(parsedLen) ? parsedLen : undefined;
+      const contentLength = Number.isSafeInteger(parsedLength) ? parsedLength : undefined;
 
-      // maxPartBytes (NFR-DR-S-001). When a cap is configured, wrap the
-      // parser per-part Readable in a counting PassThrough so the
-      // public `body` exposed to consumers can observe every byte without
-      // racing the consumer's own listener attach (PassThrough buffers
-      // upstream writes until a downstream listener is attached, so the
-      // consumer's `streamToString` / for-await drain catches every byte
-      // even if it attaches several microtasks after we install our pipe).
-      // The PassThrough is tracked in `allPartStreams` so cleanup destroys
-      // it on every termination path.
-      //
-      // On overflow we:
-      //   (a) destroy the upstream partStream to stop parser pumping,
-      //   (b) push the typed error into the queue,
-      //   (c) END the counter cleanly (NOT destroy) so the consumer's
-      //       drain on `body` resolves naturally — without this, the
-      //       consumer sees a "Premature close" error from their drain
-      //       BEFORE our queue.signalError gets a chance to surface, and
-      //       the parser's throw eats our typed error. By ending the
-      //       counter cleanly, the consumer's for-await of `body`
-      //       completes; control returns to the outer for-await of the
-      //       iterator; that .next() resolves with our error.
-      let publicBody: Readable = partStream;
+      // maxPartBytes (NFR-DR-S-001). When a cap is configured, the public
+      // body is a counting Transform piped from the parser's part stream,
+      // which keeps backpressure intact. On overflow the transform errors
+      // with the typed error, so a consumer draining the body rejects with
+      // it and the iterator surfaces the same instance.
+      let body: Readable = partStream;
       if (maxPartBytes !== undefined) {
-        const cap = maxPartBytes;
-        let partBytesAccumulated = 0;
-        let tripped = false;
-        const counter = new PassThrough();
-        allPartStreams.add(counter);
-        // Counter for upstream data. We use a Transform-style approach:
-        // intercept partStream's 'data' events with a counting listener
-        // and write each chunk to the counter ourselves (no `pipe()`).
-        // This avoids the EventEmitter snapshot race where the pipe's
-        // internal data listener fires AFTER our trip+unpipe (because
-        // the listener array was snapshotted at the start of emit()).
-        // We also forward 'end' / 'error' / 'close' explicitly.
-        const onUpstreamData = (chunk: Buffer): void => {
-          if (tripped) return;
-          partBytesAccumulated += chunk.length;
-          if (partBytesAccumulated > cap) {
-            tripped = true;
-            // Stop upstream parser.
-            if (!partStream.destroyed) partStream.destroy();
-            // Push the typed error BEFORE we end the counter so the
-            // queue ordering puts our error ahead of any post-end
-            // iterator.next() resolutions.
-            queue.signalError(
-              new MultipartPartTooLargeError({
-                maxPartBytes: cap,
-                partIndex,
-                bytesReceived: partBytesAccumulated,
-              }),
-            );
-            // End the counter cleanly so consumer drain resolves.
-            if (!counter.writableEnded) counter.end();
-            return;
-          }
-          // Below cap: forward to counter (only if counter is still
-          // writable — destroyed/ended counters reject further writes).
-          if (counter.writable && !counter.writableEnded) {
-            counter.write(chunk);
-          }
-        };
-        const onUpstreamEnd = (): void => {
-          if (tripped) return;
-          if (!counter.writableEnded) counter.end();
-        };
-        const onUpstreamError = (err: Error): void => {
-          // Forward upstream errors to the counter so a truncated part
-          // propagates to the consumer's body drain. The per-part error
-          // bridge ALSO routes the error to the queue; we deliberately
-          // destroy the counter so the consumer's drain can complete.
-          if (!counter.destroyed) counter.destroy(err);
-        };
-        partStream.on('data', onUpstreamData);
-        partStream.on('end', onUpstreamEnd);
-        partStream.on('error', onUpstreamError);
-        publicBody = counter;
+        let partBytes = 0;
+        const counter = new Transform({
+          transform(chunk: Buffer, _encoding, callback): void {
+            partBytes += chunk.length;
+            if (partBytes > maxPartBytes) {
+              callback(
+                new MultipartPartTooLargeError({
+                  maxPartBytes,
+                  partIndex,
+                  bytesReceived: partBytes,
+                }),
+              );
+              return;
+            }
+            callback(null, chunk);
+          },
+        });
+        allPartStreams.set(counter, partStream);
+        pipeline(partStream, counter, (err) => {
+          // A premature close means one side was destroyed without an
+          // error: the consumer skipping the body, or cleanup. Neither is
+          // a failure of the operation.
+          if (err != null && !isPrematureClose(err)) fail(err);
+        });
+        body = counter;
       }
 
       const part: StreamingMultipartPart = {
@@ -437,203 +387,130 @@ async function* parseMultipartRelatedImpl(
         contentType,
         ...(contentId !== undefined ? { contentId } : {}),
         ...(contentLength !== undefined ? { contentLength } : {}),
-        // When maxPartBytes is configured, body is the PassThrough that
-        // wraps parser's per-part Readable; otherwise body is parser's
-        // per-part Readable directly. Both expose Node `Readable`.
-        body: publicBody,
+        body,
       };
 
       queue.push({ type: 'part', part });
-      // FR-013: fire onProgress per yielded part. The completion-tick
-      // assertion is owned by `fetchAndHandleMultipart`.
-      fireProgress();
-    };
-    partStream.once('header', onHeader);
-    // Per-part 'error' bridge. If parser's per-part stream errors out
-    // (e.g. truncated part body — "Part terminated early due to
-    // unexpected end of multipart data"), the error propagates as an
-    // unhandled 'error' event on the body Readable and Node terminates
-    // the process. Bridge the error into the queue (pre-cleanup) or the
-    // logger (post-cleanup) so it becomes observable instead of fatal.
-    partStream.on('error', (err: Error) => {
-      if (cleaned) {
-        logger({
-          level: 'warn',
-          msg: 'multipart: late part-stream error after generator close',
-          meta: { errSummary: summarizeError(err) },
-        });
-        return;
-      }
-      queue.signalError(err);
+      // FR-013: fire onProgress per yielded part.
+      fireProgress(false);
     });
   };
 
   const onFinish = (): void => {
-    parserFinished = true;
     queue.signalEnd();
-  };
-
-  // FR-011 contract — this listener is INTENTIONALLY retained through the
-  // generator's `finally` block. Before cleanup runs it pushes the error
-  // into the queue; AFTER cleanup it routes the error observation through
-  // the configured logger so late-tick parser errors never escape as
-  // uncaught process exceptions. The `cleaned` flag is the sole
-  // discriminator.
-  const onParserError = (err: Error): void => {
-    if (cleaned) {
-      logger({
-        level: 'warn',
-        msg: 'multipart: late parser error after generator close',
-        meta: { errSummary: summarizeError(err) },
-      });
-      return;
-    }
-    queue.signalError(err);
   };
 
   const onSourceData = (chunk: Buffer): void => {
     bytesReceived += chunk.length;
     // FR-DR-A-025: idle timer resets ON EVERY CHUNK from the source. This
-    // is the SOLE idle-reset path — onProgress (which fires per-part per
-    // FR-013) is too coarse for slow-loris protection.
+    // is the SOLE idle-reset path.
     timers.resetIdle();
   };
 
-  // Retained after cleanup, like onParserError (FR-011). A source destroyed
-  // WITH an error (e.g. undici erroring an aborted fetch body, forwarded by
-  // Readable.fromWeb) can emit 'error' on a tick after the generator has
-  // closed; with no listener attached Node would raise uncaughtException.
-  const onSourceError = (err: Error): void => {
-    if (cleaned) {
-      logger({
-        level: 'warn',
-        msg: 'multipart: late source error after generator close',
-        meta: { errSummary: summarizeError(err) },
-      });
-      return;
-    }
-    queue.signalError(err);
-  };
-
-  // FR-022 truncation detector: when the source emits 'end' but parser has
-  // NOT yet emitted 'finish' on a subsequent tick, the response was cut
-  // mid-envelope. Push a MultipartTruncatedError so the consumer's next
-  // `.next()` sees it. parser may also emit its own 'error' if the
-  // truncation happens mid-part-header; the queue is first-fire-wins, so
-  // whichever path fires first is what surfaces. Either outcome runs the
-  // same FR-010 cleanup.
-  //
-  // We defer the parserFinished check to `setImmediate` so well-formed
-  // envelopes (where parser's 'finish' fires synchronously after source
-  // 'end' through the pipe machinery) do not race-trip the truncation
-  // path. setImmediate runs strictly AFTER any pending I/O and any
-  // already-scheduled process.nextTick / promise microtasks — long enough
-  // for parser's internal end-of-stream tick to land.
+  // FR-022: an 'end' lets the parser decide truncation (it errors with
+  // UnexpectedEndError when the closing delimiter never arrived). No more
+  // bytes can arrive, so the idle timer stops: a consumer still reading
+  // the last part is not a stalled source.
   const onSourceEnd = (): void => {
-    setImmediate(() => {
-      if (parserFinished) return;
-      if (cleaned) return;
-      queue.signalError(new MultipartTruncatedError(bytesReceived));
-    });
+    sourceEnded = true;
+    timers.stopIdle();
   };
 
+  // A source destroyed without an error and without 'end' (e.g. a fetch
+  // body torn down mid-stream) never ends the parser, so it is truncation.
+  const onSourceClose = (): void => {
+    if (!sourceEnded) fail(new UnexpectedEndError());
+  };
+
+  const onParserError = (err: Error): void => {
+    fail(err, 'parser');
+  };
+  const onSourceError = (err: Error): void => {
+    fail(err, 'source');
+  };
+
+  // The parser and source 'error' listeners are INTENTIONALLY retained
+  // through cleanup (FR-011): `fail` logs late errors instead of letting
+  // them escape as uncaught exceptions.
   parser.on('part', onPart);
   parser.on('finish', onFinish);
   parser.on('error', onParserError);
   source.on('data', onSourceData);
   source.on('error', onSourceError);
   source.on('end', onSourceEnd);
+  source.on('close', onSourceClose);
 
   // 6. Pipe AFTER all listeners are attached (FR-012).
   source.pipe(parser);
 
-  // FR-010 cleanup function — idempotent (`cleaned` guard). Runs from the
+  // FR-010 cleanup — idempotent (`cleaned` guard). Runs from the
   // generator's `finally` on every termination path (success, caller
-  // `break`, parser/source error, timeout/abort). The function is
-  // intentionally synchronous and total — no awaits, no thrown errors —
-  // because the cleanup contract demands it run unconditionally and
-  // exactly once.
+  // `break`, parser/source error, timeout/abort). Synchronous and total.
   const cleanup = (): void => {
     if (cleaned) return;
     cleaned = true;
 
-    // (1) Remove the listeners we attached to the source. Removing by
-    //     reference lets us coexist with any listeners the caller (or
-    //     downstream layers) may have attached. INTENTIONALLY do NOT remove
-    //     the source 'error' listener — same contract as the parser's
-    //     (FR-011, see step 5): a late-tick source error must be logged,
-    //     not escape as an uncaughtException.
     source.off('data', onSourceData);
-    // source.off('error', onSourceError);  ← deliberately left attached
     source.off('end', onSourceEnd);
-
-    // (2) Try to unpipe — wrap in a logged catch (FR-017 silent-catch
-    //     replacement site, architecture.md §7).
+    source.off('close', onSourceClose);
     try {
       source.unpipe(parser);
     } catch (err) {
+      // FR-017 silent-catch replacement site (architecture.md §7).
       logger({
         level: 'warn',
         msg: 'multipart: unpipe failed during cleanup',
         meta: { errSummary: summarizeError(err) },
       });
     }
+    if (!source.destroyed) source.destroy();
 
-    // (3) Destroy the source if it isn't already done. `destroy()` is
-    //     idempotent on Node Readable, but the `.destroyed` short-circuit
-    //     keeps the call site free of redundant work.
-    if (!source.destroyed) {
-      source.destroy();
-    }
-
-    // (4) Drain unyielded parts and destroy each one's body. This is the
-    //     silent-leak BRIEF flags (architecture.md §5.3): parser's per-part
-    //     Readables hold buffered chunks and are not GC-eligible until
-    //     destroyed. If the consumer broke out of the for-await loop,
-    //     every still-pending part is leaked unless we destroy here.
-    for (const part of queue.drainPendingParts()) {
-      // Cast: StreamingMultipartPart.body is typed as Node Readable, which
-      // exposes `.destroy()` directly.
-      part.body.destroy();
-    }
-    // Belt-and-suspenders: also destroy any per-part Readable that parser
-    // emitted on 'part' but that never made it into the queue (i.e. it
-    // never fired 'header' before cleanup ran — happens on synchronous
-    // termination paths like an immediate source error).
-    for (const partStream of allPartStreams) {
-      if (!partStream.destroyed) partStream.destroy();
+    // Destroy every body the consumer did not finish — yielded or not — so
+    // no part's buffered chunks outlive the iterator (architecture.md §5.3).
+    for (const part of queue.drainPendingParts()) part.body.destroy();
+    for (const stream of allPartStreams.keys()) {
+      if (!stream.destroyed) stream.destroy();
     }
     allPartStreams.clear();
 
-    // (5) Remove parser 'part' and 'finish' listeners. INTENTIONALLY do NOT
-    //     remove parser's 'error' listener — that's the FR-011 contract.
-    //     The retained listener checks the `cleaned` flag (set above) to
-    //     route late-tick errors through `logger.warn` instead of trying
-    //     to push into the now-closed queue.
     parser.off('part', onPart);
     parser.off('finish', onFinish);
-    // parser.off('error', onParserError);  ← deliberately left attached
-
-    // (6) Cancel idle/total timers and detach the caller-signal listener
-    //     (Layer C). timers.cleanup() is itself idempotent. We also remove
-    //     our combined-signal listener so we don't accumulate references
-    //     across operations (the controller is operation-scoped so this
-    //     is belt-and-suspenders, but cheap and correct).
     timers.signal.removeEventListener('abort', onCombinedAbort);
     timers.cleanup();
   };
 
-  // 7. Yield loop. The `finally` runs on EVERY exit path (success /
-  //    caller break / yield throw / item-error throw / source destroy)
-  //    so cleanup is centralized.
+  // 7. Yield loop. The `finally` runs on EVERY exit path so cleanup is
+  //    centralized.
   try {
     while (true) {
       const item = await queue.next();
-      if (item.type === 'end') return;
       if (item.type === 'error') throw item.err;
+      if (item.type === 'end') {
+        // FR-013 completion tick: every source byte has been counted.
+        fireProgress(true);
+        return;
+      }
       yield item.part;
     }
   } finally {
     cleanup();
   }
+}
+
+type ErrorOrigin = 'operation' | 'parser' | 'source' | 'part-stream';
+
+function isPrematureClose(err: Error): boolean {
+  return (err as { code?: unknown }).code === 'ERR_STREAM_PREMATURE_CLOSE';
+}
+
+function cancelResponseBody(input: unknown, logger: Logger): void {
+  const body = (input as { body?: unknown } | null)?.body;
+  if (!(body instanceof ReadableStream) || body.locked) return;
+  body.cancel().catch((err: unknown) => {
+    logger({
+      level: 'warn',
+      msg: 'multipart: cancelling the response body failed',
+      meta: { errSummary: summarizeError(err) },
+    });
+  });
 }

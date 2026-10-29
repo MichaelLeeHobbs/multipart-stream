@@ -102,6 +102,8 @@ for await (const part of parseMultipartRelated(req as unknown as Readable, {
 
 Drain or destroy each `part.body` before requesting the next part. The parser applies backpressure while a body is waiting for a reader; the iterator destroys leftover bodies when it closes.
 
+When the operation fails (idle or total timeout, abort, truncation, a source error, or a resource cap), every part body that has not yet received its closing delimiter is destroyed with that same error, so code awaiting `streamToString(part.body)` rejects instead of hanging. Bodies that were already complete stay readable. `part.headers` has a `null` prototype, like Node's `IncomingMessage.headers`.
+
 ## API
 
 Single entry point. Submodule exports are NOT supported (one entry, one
@@ -222,6 +224,8 @@ published `dist/` bundle by the cross-format consumer test
 - **Tree-shaking:** `package.json#sideEffects` is `false`.
 - **No browser support claim.** The library uses `node:stream`. Bundlers
   that emulate Node streams may work but are not on the support matrix.
+- **Total timeout:** for `fetchAndHandleMultipart`, `totalTimeoutMs`
+  starts at the call and covers waiting for the response headers.
 - **Concurrency contract (F-A-005):** the async-generator from
   `parseMultipartRelated` does NOT promise serialization of concurrent
   `iter.next()` calls. The library MAY but is not required to detect the

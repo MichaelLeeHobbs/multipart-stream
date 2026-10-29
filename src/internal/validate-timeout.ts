@@ -58,10 +58,32 @@ export function validatePositiveTimeout(
     value < 1 ||
     value > MAX_SAFE_TIMEOUT_MS
   ) {
-    const observed =
-      typeof value === 'number' ? String(value) : typeof value;
+    const observed = typeof value === 'number' ? String(value) : typeof value;
     throw new TypeError(
       `multipart: ${name} must be a positive finite integer in [1, 2_147_483_647]; got ${observed}. Note: Node's setTimeout clamps values above 2^31-1 to 1ms, so larger timeouts are silently broken.`,
     );
   }
+}
+
+/**
+ * Validate an optional resource cap (`maxPartBytes`, `maxParts`,
+ * `maxHeadersPerPart`, `maxHeaderBytesPerPart`): `undefined` or a positive
+ * safe integer. A non-number or `NaN` would otherwise silently disable the
+ * cap, or throw later from inside a stream listener.
+ *
+ * @returns The validated value, or `undefined` when unset.
+ * @throws {TypeError} `multipart: <name> must be a positive safe integer when
+ *   set; got <value>`.
+ *
+ * @internal
+ */
+export function validateOptionalCap(name: string, value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    const observed = typeof value === 'number' ? String(value) : typeof value;
+    throw new TypeError(
+      `multipart: ${name} must be a positive safe integer when set; got ${observed}`,
+    );
+  }
+  return value;
 }

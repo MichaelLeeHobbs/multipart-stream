@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 
 import { describe, expect, it } from 'vitest';
 
-import { parseMultipartRelated, streamToString } from '../../src/index.js';
+import { MultipartTruncatedError, parseMultipartRelated, streamToString } from '../../src/index.js';
 import { buildMultipartBody } from '../fixtures/multipart-builders.js';
 
 const BOUNDARY = 'X-BOUNDARY-7c4a';
@@ -181,8 +181,8 @@ describe('parseMultipartRelated — Readable + boundary input (T-005)', () => {
 describe('parseMultipartRelated — synchronous early errors (T-022)', () => {
   it('T-022: a synchronous parser error surfaces from the first .next() (proves listeners attached pre-pipe)', async () => {
     // Feed parser an envelope that ends without ever matching the
-    // configured boundary. parser's `_realFinish` path emits an 'error'
-    // event on next tick: "Unexpected end of multipart data". The point
+    // configured boundary. The parser's `_final` errors on the next tick,
+    // surfaced as the documented MultipartTruncatedError (FR-022). The point
     // of T-022 is that this error reaches the QUEUE — i.e. our 'error'
     // listener was attached BEFORE source.pipe(parser). If the listener
     // had been attached after pipe(), the error would have been an
@@ -193,9 +193,7 @@ describe('parseMultipartRelated — synchronous early errors (T-022)', () => {
       ...TIMEOUTS,
       boundary: BOUNDARY,
     });
-    await expect(iter.next()).rejects.toThrow(
-      /Unexpected end of multipart data/,
-    );
+    await expect(iter.next()).rejects.toBeInstanceOf(MultipartTruncatedError);
   });
 });
 
@@ -391,8 +389,6 @@ describe('parseMultipartRelated — missing Content-Type on Response (T-053)', (
       }),
     } as unknown as Response;
     const iter = parseMultipartRelated(fake, TIMEOUTS);
-    await expect(iter.next()).rejects.toThrow(
-      /Content-Type header is required/,
-    );
+    await expect(iter.next()).rejects.toThrow(/Content-Type header is required/);
   });
 });
