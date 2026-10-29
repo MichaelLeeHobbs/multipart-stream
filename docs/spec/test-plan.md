@@ -1,12 +1,12 @@
 # Test Plan — `@ubercode/multipart-stream`
 
-This plan satisfies NFR-006 ("battle-tested") and NFR-007 (≥90% branch coverage). Every acceptance criterion in `kiln/spec/spec.md` and every functional requirement appears in the Coverage Map at least once.
+This plan satisfies NFR-006 ("battle-tested") and NFR-007 (≥90% branch coverage). Every acceptance criterion in `docs/spec/spec.md` and every functional requirement appears in the Coverage Map at least once.
 
 ## Conventions
 
 - **Test framework:** `vitest`. NO Playwright (not a UI). NO Jest.
 - **Test types:**
-  - `Unit` — pure-function tests in `tests/unit/`. No I/O. Each <100 ms (per `kiln/standards/testing.md`).
+  - `Unit` — pure-function tests in `tests/unit/`. No I/O. Each <100 ms (per `docs/standards/testing.md`).
   - `Integration` — multi-module tests in `tests/integration/`. Use real `Readable.from(buffer)` and an in-process `node:http` server. No mocked sources.
 - **Test IDs:** `T-001` through `T-NNN`, sequential. Reused IDs in multiple tables (e.g., a Coverage Map row and a Negative/Edge row pointing at the same `T-014`) are intentional.
 - **Listener-leak harness:** the helper `captureDicerActivity()` patches `Dicer.prototype.emit` to record every emitted part `Readable` and every Dicer instance; tests assert on `listenerCount('part')`, `listenerCount('error')`, and `destroyed` flags after every termination path.
@@ -103,7 +103,7 @@ Maps every acceptance criterion (and every FR/NFR with a testable surface) to at
 
 ## Negative / Edge Coverage
 
-Every edge case in `kiln/spec/spec.md` § "Edge Cases & Error Scenarios" is tested.
+Every edge case in `docs/spec/spec.md` § "Edge Cases & Error Scenarios" is tested.
 
 | Scenario (from spec edge cases) | Test ID | Test Description |
 |---|---|---|
@@ -199,7 +199,7 @@ Per the operator's "battle-tested" directive, this suite is a separate axis. Eac
   - `concurrency.test.ts` — concurrent `iter.next()` does not crash (T-083).
 
 - **Test discipline:**
-  - No mocked sources where a real `Readable` works (per `kiln/standards/testing.md`).
+  - No mocked sources where a real `Readable` works (per `docs/standards/testing.md`).
   - No Playwright (not a UI).
   - No real network — `fetchAndHandleMultipart` tests use `node:http.createServer` on `127.0.0.1:0`.
   - Every test that mutates `Dicer.prototype` MUST restore it in `afterEach` (the existing reference test gets this right; we keep the same pattern in `tests/fixtures/capture-dicer.ts`).

@@ -1,5 +1,5 @@
 /**
- * Multipart envelope builder for tests, per `kiln/spec/test-plan.md`
+ * Multipart envelope builder for tests, per `docs/spec/test-plan.md`
  * "Conventions" → "Multipart envelope builder".
  *
  * Produces a `Buffer` encoding a `multipart/related` envelope with proper

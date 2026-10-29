@@ -54,7 +54,7 @@ export default [
       '@typescript-eslint/switch-exhaustiveness-check': 'error',
       '@typescript-eslint/array-type': ['error', { default: 'array' }],
 
-      // No traditional enums (per kiln coding standards)
+      // No traditional enums (per docs/standards/coding.md)
       'no-restricted-syntax': [
         'error',
         {
@@ -63,13 +63,13 @@ export default [
         },
       ],
 
-      // Function complexity (kiln testing standard alignment)
+      // Function complexity (docs/standards/testing.md alignment)
       'max-lines-per-function': ['warn', { max: 40, skipBlankLines: true, skipComments: true }],
       'max-params': ['warn', { max: 4 }],
       'max-depth': ['warn', { max: 3 }],
       complexity: ['warn', { max: 10 }],
 
-      // Silent-catch ban (kiln error-handling standard)
+      // Silent-catch ban (docs/standards/error-handling.md)
       'no-empty': ['error', { allowEmptyCatch: false }],
       '@typescript-eslint/only-throw-error': 'error',
 

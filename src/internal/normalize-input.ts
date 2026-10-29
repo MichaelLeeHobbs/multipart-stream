@@ -1,7 +1,7 @@
 /**
  * Input normalizer for `parseMultipartRelated`.
  *
- * Per `kiln/spec/data-model.md` §2.4 (`ParseInput` discriminated union), the
+ * Per `docs/spec/data-model.md` §2.4 (`ParseInput` discriminated union), the
  * public `parseMultipartRelated` accepts either a Web `Response` or a Node
  * `Readable`. Internally we always work in a `{ readable, boundary }` shape;
  * this module is the single conversion site.
@@ -25,7 +25,7 @@ import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 
 import { extractBoundary } from '../extract-boundary.js';
 
-/** Discriminated union per `kiln/spec/data-model.md` §2.4. @internal */
+/** Discriminated union per `docs/spec/data-model.md` §2.4. @internal */
 export type NormalizedInput =
   | {
       readonly kind: 'response';

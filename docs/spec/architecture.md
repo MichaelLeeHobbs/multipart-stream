@@ -46,8 +46,8 @@ multipart-stream/
 │   │   └── fetch-content-type-validation.test.ts
 │   └── fixtures/
 │       └── multipart-builders.ts             # Helpers to construct envelopes.
-├── kiln/spec/                                     # Spec, design docs, test plan.
-├── kiln/standards/                                # Inherited kiln standards.
+├── docs/spec/                                # Spec, design docs, test plan.
+├── docs/standards/                           # Coding standards.
 └── README.md
 ```
 
@@ -321,7 +321,7 @@ Default fallback: `console.warn(msg, meta)` (positional, matching console's sign
 
 ### 5.11 Why `MultipartFetchResult.errors` was removed
 
-Reference impl: `errors: Error[]` and `hadError: boolean` were a soft-fail pattern that violates `kiln/standards/error-handling.md`. The standard requires errors to either re-throw, return a Result error, or structured-log + propagate. The new shape rejects the promise on any error; the result struct is success-only. Callers who want soft-fail wrap in their own try/catch.
+Reference impl: `errors: Error[]` and `hadError: boolean` were a soft-fail pattern that violates `docs/standards/error-handling.md`. The standard requires errors to either re-throw, return a Result error, or structured-log + propagate. The new shape rejects the promise on any error; the result struct is success-only. Callers who want soft-fail wrap in their own try/catch.
 
 ### 5.12 Why drop `name` from `StreamingMultipartPart`
 
@@ -398,10 +398,10 @@ NFR-005: zero silent catches anywhere. CI grep gate will enforce.
 
 ## 8. Testing architecture
 
-(Full content in `kiln/spec/test-plan.md`.) Briefly:
+(Full content in `docs/spec/test-plan.md`.) Briefly:
 
 - **Unit tests** in `tests/unit/` for pure functions (no I/O): `extractBoundary`, `flattenHeaderValue`, `flattenDicerHeaders`, `validatePositiveTimeout`, error class properties.
-- **Integration tests** in `tests/integration/` for parser/fetch behavior. These use real `Readable.from(buffer)` for input and a small in-process `node:http` server (`http.createServer`) for `fetchAndHandleMultipart` tests. **No mocked sources** where a real `Readable` works (per `kiln/standards/testing.md`).
+- **Integration tests** in `tests/integration/` for parser/fetch behavior. These use real `Readable.from(buffer)` for input and a small in-process `node:http` server (`http.createServer`) for `fetchAndHandleMultipart` tests. **No mocked sources** where a real `Readable` works (per `docs/standards/testing.md`).
 - **Listener-leak harness** patches `Dicer.prototype.emit` (per existing reference test) to capture all part `Readable`s and dicer instances; assertions on `listenerCount` and `destroyed` flags after every termination path.
 - **Fault-injection harness** for timeouts and abort uses `vi.useFakeTimers` and a `Readable` that emits a single byte then sits silent.
 

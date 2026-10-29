@@ -549,7 +549,7 @@ function readOptions(opts: Partial<ParseMultipartOptions>) {
   validatePositiveTimeout('idleTimeoutMs', idleTimeoutMs);
   validatePositiveTimeout('totalTimeoutMs', totalTimeoutMs);
 
-  // Resource caps (kiln/spec/api.md §2, review-security.md F-S-001/004/012):
+  // Resource caps (docs/spec/api.md §2, review-security.md F-S-001/004/012):
   //   - maxPartBytes: undefined => no cap (NFR-DR-S-001).
   //   - maxParts: undefined => default 10_000 (NFR-DR-S-012).
   //   - maxHeadersPerPart: undefined => default 100 (NFR-DR-S-004).

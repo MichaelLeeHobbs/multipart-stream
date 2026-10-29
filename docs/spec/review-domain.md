@@ -142,7 +142,7 @@ Cross-checked against staged repo state at `C:\Users\mhobb\WebstormProjects\_pub
 
 **Gap:** TypeScript 5.0 added `verbatimModuleSyntax: true` which forces every type-only import to use `import type` and every type-only re-export to use `export type`. Without it, the compiler is free to elide type imports silently, which is forgiving but masks errors when a consumer reads the emitted `.d.ts` and finds runtime values referenced through type-only paths (or vice versa — runtime constants that disappear from the emitted JS because they look type-only). For a published library where the `.d.ts` IS part of the public contract, `verbatimModuleSyntax` is the right default in 2026. Coding standard says "prefer inline type imports" but the compiler isn't enforcing it.
 
-**Recommendation:** Propose `NFR-DR-D-010 tsconfig.base.json MUST set "verbatimModuleSyntax": true so that every import/export is unambiguous about value vs type. Combined with the existing strict mode, this catches re-export mistakes at compile time rather than at consumer runtime. The kiln/standards/coding.md "Prefer inline type imports" rule becomes enforceable.`
+**Recommendation:** Propose `NFR-DR-D-010 tsconfig.base.json MUST set "verbatimModuleSyntax": true so that every import/export is unambiguous about value vs type. Combined with the existing strict mode, this catches re-export mistakes at compile time rather than at consumer runtime. The docs/standards/coding.md "Prefer inline type imports" rule becomes enforceable.`
 
 **Action rule:** 2
 
@@ -228,7 +228,7 @@ Cross-checked against staged repo state at `C:\Users\mhobb\WebstormProjects\_pub
 | Low      | 2 (F-D-013, F-D-014) |
 | **Total** | **15** |
 
-## Action-rule legend (per kiln/prompts/spec-agent.md lines 347-365)
+## Action-rule legend
 
 - **1** = MUST add to spec before Phase 6 PLAN
 - **2** = SHOULD add to spec; defer to pre-publish if Sprint scope is locked

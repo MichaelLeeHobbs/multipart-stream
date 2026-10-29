@@ -8,7 +8,7 @@
 
 **Severity:** High
 **Type:** Resource-exhaustion
-**Location:** `kiln/spec/spec.md` FRs (no FR exists); `kiln/spec/api.md` §4 `streamToBuffer`; `kiln/spec/data-model.md` §1.4 `ParseMultipartOptions`
+**Location:** `docs/spec/spec.md` FRs (no FR exists); `docs/spec/api.md` §4 `streamToBuffer`; `docs/spec/data-model.md` §1.4 `ParseMultipartOptions`
 
 **Threat:** A malicious server returns a `multipart/related` response containing a single part whose `Content-Type` matches a branch in the caller's `PartParser<T>` that does `await streamToBuffer(part.body)` (the documented happy-path pattern in `api.md` §3 example). The server streams 4 GiB (or more) into that one part. Nothing in the spec caps per-part body size — `streamToBuffer` accumulates the entire payload in process heap and the Node process OOMs. The library boasts "Memory footprint MUST stay constant relative to part-body size, not response size" (NFR-011) — this is precisely the wrong guarantee. The attacker controls part-body size and that is what blows up. NFR-011 should also bound part-body size, or the library should ship a `maxPartBytes` cap option that `streamToBuffer` and the per-part wrapper enforce.
 
@@ -26,7 +26,7 @@ The `application/json` example in `api.md` §2 — `JSON.parse(await streamToStr
 
 **Severity:** High
 **Type:** DoS
-**Location:** `kiln/spec/spec.md` FR-006; `kiln/spec/data-model.md` §1.4 (`idleTimeoutMs?`, `totalTimeoutMs?` both optional with default "disabled")
+**Location:** `docs/spec/spec.md` FR-006; `docs/spec/data-model.md` §1.4 (`idleTimeoutMs?`, `totalTimeoutMs?` both optional with default "disabled")
 
 **Threat:** FR-006 makes timeouts REQUIRED on `fetchAndHandleMultipart` but only OPTIONAL on `parseMultipartRelated`. The latter is the lower-level entry. A perfectly plausible server use is `parseMultipartRelated(req as unknown as Response, ...)` or `parseMultipartRelated(req, { boundary })` where `req` is an inbound HTTP request (a Node `Readable`). An attacker holds the connection open and dribbles one byte every 30 seconds (or never sends the closing boundary). Without an idle/total timeout the generator blocks forever; the connection (and the listener it pinned) leaks. With many such connections, the attacker exhausts the server's FD budget / event-loop attention.
 
@@ -42,7 +42,7 @@ The `data-model.md` defaults table makes the default explicit: "Omit to disable 
 
 **Severity:** High
 **Type:** Resource-exhaustion / DoS
-**Location:** `kiln/spec/spec.md` (no FR); `kiln/spec/data-model.md` §1.1, §2.5–2.7 (header flattening); `kiln/spec/architecture.md`
+**Location:** `docs/spec/spec.md` (no FR); `docs/spec/data-model.md` §1.1, §2.5–2.7 (header flattening); `docs/spec/architecture.md`
 
 **Threat:** Dicer 0.3.1 accepts arbitrarily large header blocks per part. An attacker sends a single part with 100,000 headers, or one header whose value is a 100 MB string. The library calls `flattenDicerHeaders` which flattens every value to a UTF-8 string and stores them in the `StreamingMultipartPart.headers` map yielded to the caller — heap usage is now O(attacker-chosen). Dicer's per-part `'header'` event is buffered and emitted as a single object, so this is fully realized in memory before the part body even begins streaming. Even if the caller skips the part by returning `undefined`, the headers have already been allocated.
 
@@ -58,7 +58,7 @@ The spec's `flattenHeaderValue` description in `data-model.md` §2.6 mentions "R
 
 **Severity:** Medium
 **Type:** Validation-gap
-**Location:** `kiln/spec/spec.md` FR-023; `kiln/spec/data-model.md` §2.8; spec edge-case row "`sanitizeFileName` receives a path-traversal attempt"
+**Location:** `docs/spec/spec.md` FR-023; `docs/spec/data-model.md` §2.8; spec edge-case row "`sanitizeFileName` receives a path-traversal attempt"
 
 **Threat:** Although `sanitizeFileName` is internal (FR-016), the spec keeps it inside the library and the BRIEF specifically calls it in scope. The current rule (strip path seps, strip control chars, strip leading dots, replace non-`[A-Za-z0-9._-]` with `_`, cap 255) does NOT:
 
@@ -77,7 +77,7 @@ The spec's `flattenHeaderValue` description in `data-model.md` §2.6 mentions "R
 
 **Severity:** Medium
 **Type:** Info-leak / Injection
-**Location:** `kiln/spec/spec.md` FR-021; `kiln/spec/api.md` §2 Throws section; `kiln/spec/api.md` §5 `extractBoundary`
+**Location:** `docs/spec/spec.md` FR-021; `docs/spec/api.md` §2 Throws section; `docs/spec/api.md` §5 `extractBoundary`
 
 **Threat:** FR-021 mandates the error message `'multipart: response Content-Type is not multipart/related; got <actual>'` where `<actual>` is the raw `Content-Type` header value the server returned. An attacker who controls the upstream response (e.g., compromised microservice, MITM on a non-TLS hop, or the attacker simply IS the server) sets `Content-Type` to a payload like `application/json\r\n\r\n<huge attacker text with newlines and ANSI escapes>`. When the caller logs this error message via `console.error(err)` or a structured logger that doesn't sanitize, the attacker has injected lines into the caller's log stream. With ANSI escape sequences, the attacker can rewrite terminal scrollback, hide log lines, or spoof prompts. `extractBoundary`'s error messages (`api.md` §5 Throws) similarly embed the entire `<header>` value.
 
@@ -93,7 +93,7 @@ A second concern: an extremely long attacker-supplied `Content-Type` makes the e
 
 **Severity:** Low
 **Type:** Info-leak
-**Location:** `kiln/spec/data-model.md` §1.8 `MultipartAbortError`; `kiln/spec/api.md` §8
+**Location:** `docs/spec/data-model.md` §1.8 `MultipartAbortError`; `docs/spec/api.md` §8
 
 **Threat:** `MultipartAbortError.reason` carries the abort signal's `reason` through to the caller. This is fine for caller-controlled signals (the caller's user-cancel reason). However, when the library composes its caller-signal with internal idle/total timer signals into a single combined signal (per `architecture.md` §3 Layer B), the combined signal's `reason` could be the timer's reason, the caller's reason, or — depending on implementation — a chained reason that includes the server's URL or internal state. The spec is silent on what `reason` should hold when an internal timer wins the race. If the library accidentally surfaces an `Error` whose `.message` was constructed from response data, it leaks.
 
@@ -109,7 +109,7 @@ Additionally, if a future change ever introduces a `cause` chain that includes t
 
 **Severity:** Medium
 **Type:** Info-leak
-**Location:** `kiln/spec/architecture.md` §7 (silent-catch replacements); `kiln/spec/spec.md` FR-017, US-007 ("late parser error after generator close"); `kiln/spec/api.md` cleanup §1.7
+**Location:** `docs/spec/architecture.md` §7 (silent-catch replacements); `docs/spec/spec.md` FR-017, US-007 ("late parser error after generator close"); `docs/spec/api.md` cleanup §1.7
 
 **Threat:** Several spec sites pass `{ err }` to `logger.warn`:
 - US-007: `logger.warn('multipart: late parser error after generator close', { err })`
@@ -119,7 +119,7 @@ The `err` here can be an `Error` whose `.message` was constructed by dicer from 
 
 Additionally, `err.stack` may include internal source paths (e.g., `…/dist/index.js` line numbers) which is benign, but on bundled builds with sourcemaps loaded, original source paths leak. Lower severity but worth a note.
 
-**Recommendation:** Add `FR-DR-S-008 The library MUST NOT pass raw chunk data to logger.warn meta. When logging an Error whose source is dicer or the source stream, the library SHOULD log only err.name and a truncated err.message (<= 120 chars, control-char-stripped) under a key like errSummary; the full err object MAY be logged under err only when the caller's logger is known to handle untrusted data safely (i.e., never by default).` Document this in `kiln/standards/error-handling.md` cross-link or in a new `## Security Considerations` section in spec.md. Add a unit test that asserts the meta object passed to `logger.warn` does not contain raw chunk bytes from a malformed input.
+**Recommendation:** Add `FR-DR-S-008 The library MUST NOT pass raw chunk data to logger.warn meta. When logging an Error whose source is dicer or the source stream, the library SHOULD log only err.name and a truncated err.message (<= 120 chars, control-char-stripped) under a key like errSummary; the full err object MAY be logged under err only when the caller's logger is known to handle untrusted data safely (i.e., never by default).` Document this in `docs/standards/error-handling.md` cross-link or in a new `## Security Considerations` section in spec.md. Add a unit test that asserts the meta object passed to `logger.warn` does not contain raw chunk bytes from a malformed input.
 
 **Action rule:** 2
 
@@ -129,7 +129,7 @@ Additionally, `err.stack` may include internal source paths (e.g., `…/dist/ind
 
 **Severity:** Medium
 **Type:** Dependency-risk
-**Location:** `kiln/spec/spec.md` NFR-004; `kiln/spec/architecture.md` §5.1; `BRIEF.md`
+**Location:** `docs/spec/spec.md` NFR-004; `docs/spec/architecture.md` §5.1; `BRIEF.md`
 
 **Threat:** Dicer's last npm publish was 2021-12. The package is the library's sole runtime dep, and the library's security posture is fully inherited from dicer. Two concrete risks:
 
@@ -149,7 +149,7 @@ Additionally, `err.stack` may include internal source paths (e.g., `…/dist/ind
 
 **Severity:** Low
 **Type:** Validation-gap
-**Location:** `kiln/spec/data-model.md` §2.11 `validatePositiveTimeout`; `kiln/spec/spec.md` Edge Cases (idleTimeoutMs: 0/NaN)
+**Location:** `docs/spec/data-model.md` §2.11 `validatePositiveTimeout`; `docs/spec/spec.md` Edge Cases (idleTimeoutMs: 0/NaN)
 
 **Threat:** `validatePositiveTimeout` rejects 0, NaN, Infinity, negatives, non-integers — but accepts arbitrarily large positive integers. Node's `setTimeout` clamps any value > `2^31 - 1` (≈24.8 days) to `1`, immediately firing the timer. An attacker who controls a configuration source (env var, config file injection) sets `totalTimeoutMs: 99999999999` expecting "effectively forever" — instead the timer fires immediately and every operation rejects with `MultipartTotalTimeoutError`. Self-DoS via misconfiguration is not a remote attack but is a footgun the spec can close.
 
@@ -163,7 +163,7 @@ Additionally, `err.stack` may include internal source paths (e.g., `…/dist/ind
 
 **Severity:** Low
 **Type:** Info-leak
-**Location:** `kiln/spec/data-model.md` §1.5 `fetchInit?: Omit<RequestInit, 'signal'>`; `kiln/spec/api.md` §2
+**Location:** `docs/spec/data-model.md` §1.5 `fetchInit?: Omit<RequestInit, 'signal'>`; `docs/spec/api.md` §2
 
 **Threat:** The library forwards `fetchInit.headers` (including `Authorization`, `Cookie`, etc.) to `fetch` unchanged. By default, Node's `fetch` follows redirects and preserves `Authorization` across cross-origin redirects only if `redirect: 'follow'` and the underlying undici implementation (Node 20+) is the only one in play. An attacker controlling the upstream returns a 302 to `evil.example.com` and harvests the caller's `Authorization` header. This is partly outside the library's scope (it's `fetch` semantics), but the spec promotes `fetchAndHandleMultipart` as an end-to-end wrapper that includes content-type validation — suggesting it's the safe choice — without warning callers about the redirect-Authorization gotcha.
 
@@ -177,7 +177,7 @@ Additionally, `err.stack` may include internal source paths (e.g., `…/dist/ind
 
 **Severity:** Medium
 **Type:** DoS
-**Location:** `kiln/spec/api.md` §5; `kiln/spec/data-model.md` §2.10
+**Location:** `docs/spec/api.md` §5; `docs/spec/data-model.md` §2.10
 
 **Threat:** `extractBoundary` is a public utility (FR-016) that "Implements RFC 2046 quoted-string + bare-token forms." The spec describes the function but does NOT pin the regex it uses. RFC 2046 boundary parsing with quoted-string handling is a classic ReDoS hazard if the regex uses backtracking quantifiers (e.g., `boundary=("(?:[^"\\]|\\.)*"|[^;]+)` with overlapping alternation). An attacker who lands a 64 KB `Content-Type` value with crafted `\\` sequences can exhaust CPU. `extractBoundary` runs synchronously on the main event loop before any timer is armed (it's called during validation in FR-021's path), so the attacker can stall the event loop arbitrarily long.
 
@@ -193,7 +193,7 @@ The spec has T-029 (extractBoundary unit) and T-054 (quoted-string boundary), bu
 
 **Severity:** Medium
 **Type:** Resource-exhaustion / DoS
-**Location:** `kiln/spec/spec.md` (no FR); `kiln/spec/data-model.md` §1.3 `MultipartFetchResult.parts`
+**Location:** `docs/spec/spec.md` (no FR); `docs/spec/data-model.md` §1.3 `MultipartFetchResult.parts`
 
 **Threat:** Complementary to F-S-001 (one giant part). Here the attacker streams 1,000,000 tiny parts (each with valid headers + 1-byte body). For each, the library:
 - allocates a `StreamingMultipartPart` object,

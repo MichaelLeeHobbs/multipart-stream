@@ -15,7 +15,7 @@ import { extractBoundary } from '../../src/extract-boundary.js';
 
 describe('extractBoundary — T-080: NFR-DR-S-011 ReDoS-resistance perf gate', () => {
   it('parses a 64 KiB pathological input in well under 50 ms (mean over 10 iterations)', () => {
-    // Pathological input per kiln/spec/test-plan.md row T-080:
+    // Pathological input per docs/spec/test-plan.md row T-080:
     //   `multipart/related; boundary="' + '\\\"'.repeat(32_000) + '"`
     // ~64 KiB total: 32k pairs of `\"` inside a quoted string. A naive
     // backtracking regex with alternation between the quoted-string and

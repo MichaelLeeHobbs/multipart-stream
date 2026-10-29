@@ -167,7 +167,7 @@ describe('validatePositiveTimeout — upper-bound enforcement (NFR-DR-S-009)', (
 });
 
 describe('validatePositiveTimeout — T-079 dedicated upper-bound assertion (NFR-DR-S-009)', () => {
-  // T-079 row from kiln/spec/test-plan.md: "input 2_147_483_647 PASSES
+  // T-079 row from docs/spec/test-plan.md: "input 2_147_483_647 PASSES
   // (boundary-inclusive); inputs 2_147_483_648, 2^31, Number.MAX_SAFE_INTEGER
   // all throw TypeError whose message mentions setTimeout clamping."
   // T-079 is the dedicated row that asserts the contract end-to-end.

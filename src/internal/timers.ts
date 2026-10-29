@@ -1,7 +1,7 @@
 /**
  * `TimerState` — composite abort plumbing for `parseMultipartRelated`'s
  * idle timeout, total timeout, and caller-provided `AbortSignal`. Per
- * `kiln/spec/data-model.md` §2.3 and `kiln/spec/architecture.md` §3 (Layer A owns the
+ * `docs/spec/data-model.md` §2.3 and `docs/spec/architecture.md` §3 (Layer A owns the
  * timers per FR-DR-A-026), this module is the single source for all four
  * termination-by-time signals: idle, total, caller abort, parser-throw /
  * source-error.
