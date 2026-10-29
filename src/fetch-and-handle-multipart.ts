@@ -38,7 +38,7 @@
  */
 
 import { MultipartAbortError, MultipartTotalTimeoutError } from './errors.js';
-import { defaultLogger } from './internal/default-logger.js';
+import { resolveLogger } from './internal/default-logger.js';
 import { summarizeError, truncateForErrorEmbed } from './internal/format-error-embed.js';
 import { validateOptionalCap, validatePositiveTimeout } from './internal/validate-timeout.js';
 import { parseMultipartRelatedFrom } from './parse-multipart-related.js';
@@ -143,7 +143,7 @@ export async function fetchAndHandleMultipart<T>(
 
   // 2. Logger fallback (FR-018 / JC-2), used for the body-cancel site. The
   //    caller's logger is forwarded to parseMultipartRelated as-is.
-  const logger: Logger = options.logger ?? defaultLogger;
+  const logger: Logger = resolveLogger(options.logger);
 
   // 4. Always supply our own onProgress so we can capture the byte count.
   //    Layer A fires it per part and once at completion, and wraps it in

@@ -36,7 +36,7 @@ import {
   MultipartTooManyPartsError,
   MultipartTruncatedError,
 } from './errors.js';
-import { defaultLogger } from './internal/default-logger.js';
+import { resolveLogger } from './internal/default-logger.js';
 import { flattenPartHeaders } from './internal/flatten-headers.js';
 import { summarizeError } from './internal/format-error-embed.js';
 import {
@@ -170,23 +170,9 @@ async function* parseMultipartRelatedImpl(
   const onProgress = opts.onProgress;
 
   // 2. Logger fallback (FR-018 / JC-2). A logger that throws must not escape
-  //    from a stream listener, so its failure is reported to the default
-  //    sink instead.
-  const callerLogger = opts.logger;
-  const logger: Logger =
-    callerLogger === undefined
-      ? defaultLogger
-      : (event) => {
-          try {
-            callerLogger(event);
-          } catch (err) {
-            defaultLogger({
-              level: 'warn',
-              msg: 'multipart: logger threw',
-              meta: { event: event.msg, errSummary: summarizeError(err) },
-            });
-          }
-        };
+  //    from a stream listener, so resolveLogger reports its failure to the
+  //    default sink instead.
+  const logger = resolveLogger(opts.logger);
 
   let normalized: ReturnType<typeof normalizeInput>;
   try {
@@ -215,6 +201,8 @@ async function* parseMultipartRelatedImpl(
   let nextPartIndex = 0;
   let partsObserved = 0;
   let sourceEnded = false;
+  let parserFinished = false;
+  let openCounters = 0;
   let cleaned = false;
   // The first terminal error. Later errors are consequences of it (a
   // destroyed source erroring, bodies failing with it) and are dropped.
@@ -323,8 +311,11 @@ async function* parseMultipartRelatedImpl(
     const partIndex = nextPartIndex++;
     // Per-part 'error' bridge: without a listener, a body failed by `fail`
     // would raise an uncaughtException when the consumer is not reading it.
+    // With `maxPartBytes`, pipeline() destroys this stream with a
+    // premature-close error when the consumer destroys the public body to
+    // skip it, which is documented usage rather than a failure.
     partStream.on('error', (err: Error) => {
-      fail(err, 'part-stream');
+      if (!isPrematureClose(err)) fail(err, 'part-stream');
     });
 
     // maxParts (NFR-DR-S-012): observed === maxParts + 1 on first overflow.
@@ -357,24 +348,34 @@ async function* parseMultipartRelatedImpl(
           transform(chunk: Buffer, _encoding, callback): void {
             partBytes += chunk.length;
             if (partBytes > maxPartBytes) {
-              callback(
+              // Fail synchronously, before another part's counter can trip.
+              // The body then rejects with the operation's one error
+              // instance, whichever failure came first.
+              fail(
                 new MultipartPartTooLargeError({
                   maxPartBytes,
                   partIndex,
                   bytesReceived: partBytes,
                 }),
               );
+              callback(failure);
               return;
             }
             callback(null, chunk);
           },
         });
         allPartStreams.set(counter, partStream);
+        // The parser can finish while an overflowing chunk still waits in
+        // the counter, so the end of the envelope is held until every
+        // counter has settled (see maybeSignalEnd).
+        openCounters++;
         pipeline(partStream, counter, (err) => {
+          openCounters--;
           // A premature close means one side was destroyed without an
           // error: the consumer skipping the body, or cleanup. Neither is
           // a failure of the operation.
           if (err != null && !isPrematureClose(err)) fail(err);
+          else maybeSignalEnd();
         });
         body = counter;
       }
@@ -396,8 +397,12 @@ async function* parseMultipartRelatedImpl(
     });
   };
 
+  const maybeSignalEnd = (): void => {
+    if (parserFinished && openCounters === 0 && failure === undefined) queue.signalEnd();
+  };
   const onFinish = (): void => {
-    queue.signalEnd();
+    parserFinished = true;
+    maybeSignalEnd();
   };
 
   const onSourceData = (chunk: Buffer): void => {
@@ -417,9 +422,11 @@ async function* parseMultipartRelatedImpl(
   };
 
   // A source destroyed without an error and without 'end' (e.g. a fetch
-  // body torn down mid-stream) never ends the parser, so it is truncation.
+  // body torn down mid-stream) never ends the parser, so end it here: the
+  // parser then decides, exactly as for 'end', whether the closing
+  // delimiter arrived (only the epilogue was lost) or the input was cut.
   const onSourceClose = (): void => {
-    if (!sourceEnded) fail(new UnexpectedEndError());
+    if (!sourceEnded && !parser.writableEnded) parser.end();
   };
 
   const onParserError = (err: Error): void => {
@@ -439,6 +446,14 @@ async function* parseMultipartRelatedImpl(
   source.on('error', onSourceError);
   source.on('end', onSourceEnd);
   source.on('close', onSourceClose);
+
+  // A source destroyed before the call already emitted 'error'/'close', so
+  // the listeners above will never run; fail now instead of idling out.
+  if (source.destroyed) {
+    const sourceErr = source.errored;
+    if (sourceErr === null) onSourceClose();
+    else onSourceError(sourceErr);
+  }
 
   // 6. Pipe AFTER all listeners are attached (FR-012).
   source.pipe(parser);
