@@ -55,7 +55,7 @@ pnpm coverage
 pnpm lint
 pnpm typecheck
 pnpm check           # lint + typecheck + test
-pnpm pack --dry-run  # verify publish surface
+npm pack --dry-run   # verify publish surface (pnpm@10.0.0 pack has no --dry-run)
 ```
 
 ## Public API surface (per BRIEF.md, finalized in kiln/spec/api.md)

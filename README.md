@@ -32,7 +32,7 @@ import {
 } from '@ubercode/multipart-stream';
 
 interface MetaPart { kind: 'meta'; payload: unknown }
-interface BlobPart { kind: 'blob'; bytes: number; contentId?: string }
+interface BlobPart { kind: 'blob'; bytes: number; contentId?: string | undefined }
 type Part = MetaPart | BlobPart;
 
 const ctrl = new AbortController();
