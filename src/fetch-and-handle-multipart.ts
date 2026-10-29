@@ -75,8 +75,8 @@ import type {
  * @throws {Error} `multipart: pass signal via options.signal — fetchInit.signal
  *   is reserved for internal use` when `options.fetchInit.signal` is set
  *   (FR-024).
- * @throws {MultipartAbortError} synchronously when `options.signal?.aborted`
- *   is `true` at call time (FR-009). `fetch` is NEVER invoked on this path
+ * @throws {MultipartAbortError} (as a rejection, before `fetch` is called)
+ *   when `options.signal?.aborted` is `true` at call time (FR-009). `fetch` is NEVER invoked on this path
  *   — T-013 spies on `globalThis.fetch` to verify.
  * @throws {Error} `multipart: response Content-Type is not multipart/related;
  *   got <actual>` when the response Content-Type doesn't start with

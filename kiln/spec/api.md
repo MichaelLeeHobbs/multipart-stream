@@ -150,8 +150,8 @@ Wraps `fetch` end-to-end: idle + total timeout, abort propagation, progress repo
 
 ### Throws / rejects
 
-- `TypeError` synchronously when `options.parser`, `options.idleTimeoutMs`, or `options.totalTimeoutMs` is missing or invalid (FR-006). The validation message for the timeouts MUST mention Node's `setTimeout` `2^31 - 1` clamping bound (NFR-DR-S-009).
-- `MultipartAbortError` synchronously when `options.signal?.aborted === true` (US-005, FR-009).
+- `TypeError` (the returned promise rejects before `fetch` is called) when `options.parser`, `options.idleTimeoutMs`, or `options.totalTimeoutMs` is missing or invalid (FR-006). The validation message for the timeouts MUST mention Node's `setTimeout` `2^31 - 1` clamping bound (NFR-DR-S-009).
+- `MultipartAbortError` (rejection, before `fetch` is called) when `options.signal?.aborted === true` (US-005, FR-009).
 - `Error('multipart: response Content-Type is not multipart/related; got <actual>')` when the response Content-Type does not start with `multipart/related` case-insensitive (FR-021). The embedded `<actual>` value is sanitized per NFR-DR-S-006 (truncated to <= 120 chars, control chars + ANSI escape sequences replaced with `[redacted-control]`, then JSON.stringify'd so embedded quotes are visible). `fetch` is allowed to complete; dicer is never constructed.
 - `Error('multipart: response body is null')` when the response has no body.
 - `MultipartIdleTimeoutError`, `MultipartTotalTimeoutError`, `MultipartAbortError`, `MultipartTruncatedError` — same conditions as `parseMultipartRelated`.
@@ -161,7 +161,7 @@ Wraps `fetch` end-to-end: idle + total timeout, abort propagation, progress repo
 
 ### Behavioral notes
 
-- `options.fetchInit.signal` is RESERVED. If the caller sets `options.fetchInit.signal` (whether or not `options.signal` is also set), the library throws synchronously: `Error('multipart: pass signal via options.signal — fetchInit.signal is reserved for internal use')`. The library composes the caller's `options.signal` with internal idle/total timer signals into the combined signal it forwards to `fetch`. (FR-024.)
+- `options.fetchInit.signal` is RESERVED. If the caller sets `options.fetchInit.signal` (whether or not `options.signal` is also set), the library throws synchronously: `Error('multipart: pass signal via options.signal — fetchInit.signal is reserved for internal use')`. The library composes the caller's `options.signal` with an internal total-timeout budget into the signal it forwards to `fetch`, so `totalTimeoutMs` also covers waiting for response headers; the idle timer starts with the body. (FR-024.)
 - `options.onProgress` is invoked at least once per yielded part and once at completion (FR-013). Caller exceptions are caught and logged via `options.logger` (event-style; see §1.7), never re-thrown.
 - `options.parser` returning `undefined` skips the part (FR-014); the part body is drained internally before the next `yield`.
 - All resource-cap options (`maxPartBytes`, `maxParts`, `maxHeadersPerPart`, `maxHeaderBytesPerPart`) are forwarded to `parseMultipartRelated` unchanged.

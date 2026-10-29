@@ -87,8 +87,8 @@ import type { Logger, ParseMultipartOptions, StreamingMultipartPart } from './ty
  * @throws {MultipartAbortError} when `opts.signal` fires (or is already
  *   aborted at call time — first `.next()` rejects synchronously per FR-009).
  *   `error.reason` is the caller's `signal.reason` verbatim (F-S-006).
- * @throws {MultipartTruncatedError} when the source emits `'end'` before
- *   parser emits `'finish'` (FR-022).
+ * @throws {MultipartTruncatedError} when the source ends, or is destroyed
+ *   without an error, before the closing delimiter arrives (FR-022).
  *
  * @example
  *   for await (const part of parseMultipartRelated(res, {
@@ -326,6 +326,8 @@ async function* parseMultipartRelatedImpl(
     }
 
     partStream.once('header', (raw: PartHeaders, rawHeaderBlock: Buffer) => {
+      // The generator already closed: nobody will read this part.
+      if (cleaned) return;
       const headers = flattenPartHeaders(raw);
       const contentType = headers['content-type'] ?? '';
       const contentId = headers['content-id'];
@@ -426,7 +428,10 @@ async function* parseMultipartRelatedImpl(
   // parser then decides, exactly as for 'end', whether the closing
   // delimiter arrived (only the epilogue was lost) or the input was cut.
   const onSourceClose = (): void => {
-    if (!sourceEnded && !parser.writableEnded) parser.end();
+    if (sourceEnded) return;
+    // As for 'end': no more bytes can arrive.
+    timers.stopIdle();
+    if (!parser.writableEnded) parser.end();
   };
 
   const onParserError = (err: Error): void => {
@@ -450,9 +455,10 @@ async function* parseMultipartRelatedImpl(
   // A source destroyed before the call already emitted 'error'/'close', so
   // the listeners above will never run; fail now instead of idling out.
   if (source.destroyed) {
-    const sourceErr = source.errored;
-    if (sourceErr === null) onSourceClose();
-    else onSourceError(sourceErr);
+    // Duck-typed Readables may lack `errored` (undefined) or hold a non-Error.
+    const sourceErr: unknown = source.errored;
+    if (sourceErr instanceof Error) onSourceError(sourceErr);
+    else onSourceClose();
   }
 
   // 6. Pipe AFTER all listeners are attached (FR-012).
@@ -488,6 +494,9 @@ async function* parseMultipartRelatedImpl(
 
     parser.off('part', onPart);
     parser.off('finish', onFinish);
+    // Stop parsing: a write released by destroying a body above would
+    // otherwise keep producing parts after the generator closed.
+    parser.destroy();
     timers.signal.removeEventListener('abort', onCombinedAbort);
     timers.cleanup();
   };

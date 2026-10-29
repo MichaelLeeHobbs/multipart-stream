@@ -79,7 +79,8 @@ export interface StreamingMultipartPart {
 
   /**
    * The streaming body of this part as a Node `Readable`. Backed directly by
-   * parser's per-part stream — no intermediate buffering. The parser applies
+   * parser's per-part stream (with `maxPartBytes`, through a counting
+   * Transform) — no intermediate buffering. The parser applies
    * backpressure when this stream's buffer fills. Callers should consume
    * (drain, pipe, or destroy) before requesting the next part.
    *

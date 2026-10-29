@@ -63,7 +63,7 @@ pnpm pack --dry-run  # verify publish surface
 - `parseMultipartRelated(res, opts)` — async-generator over parts; cleanup-safe
 - `fetchAndHandleMultipart(url, options)` — `fetch` wrapper with idle/total timeout, AbortSignal, progress
 - `streamToString(readable, encoding?)` — collect a small text part
-- Utility helpers: `extractBoundary` is public; `flattenPartHeaders` stays internal (`sanitizeFileName` was removed as unused)
+- Utility helpers: `extractBoundary`, `flattenPartHeaders`, `flattenHeaderValue`, `sanitizeFileName`, `deriveNameFromContentId` (some may stay internal — spec decides)
 - Types: `StreamingMultipartPart`, `PartParser<T>`, `ParseMultipartOptions`, `MultipartFetchResult<T>`, `MultipartHandlerOptions<T>`
 
 ## What this project is NOT
