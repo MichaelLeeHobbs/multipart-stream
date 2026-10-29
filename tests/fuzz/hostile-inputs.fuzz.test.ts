@@ -839,7 +839,9 @@ describe('fuzz: stream helpers', () => {
             }
           },
         ),
-        params,
+        // A run that never settles fails with its counterexample and seed
+        // instead of timing out the whole test with no inputs to replay.
+        { ...params, timeout: 5000 },
       );
     },
     testTimeout(20),
