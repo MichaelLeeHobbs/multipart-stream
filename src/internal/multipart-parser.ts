@@ -6,14 +6,65 @@ export type PartHeaders = Record<string, string[]>;
 
 const HEADER_END = Buffer.from('\r\n\r\n');
 const INITIAL_CRLF = Buffer.from('\r\n');
-const CLOSING_DASHES = Buffer.from('--');
-const CLOSING_CR = Buffer.from('--\r');
-const CLOSING_CRLF = Buffer.from('--\r\n');
-// Keep header accumulation bounded before the caller's configured cap can run.
-const MAX_HEADER_BYTES = 80 * 1024;
-const MAX_HEADER_PAIRS = 2_000;
+// RFC 2046 transport-padding (LWSP after a delimiter) is bounded so a run of
+// whitespace cannot grow the held suffix without limit; past this it is body.
+const MAX_PADDING = 1024;
+const MAX_SUFFIX = 2 + MAX_PADDING + 2;
+
+/** Caps the parser enforces while accumulating a part's header block. */
+export interface HeaderLimits {
+  /** Maximum header lines, counting repeated names. */
+  readonly maxHeaderPairs: number;
+  /** Maximum raw header-block bytes, including the terminating CRLF pair. */
+  readonly maxHeaderBytes: number;
+}
+
+/** The source ended before the closing delimiter. */
+export class UnexpectedEndError extends Error {
+  constructor() {
+    super('Unexpected end of multipart data');
+  }
+}
+
+/** A part's header block exceeded one of the {@link HeaderLimits}. */
+export class HeaderLimitError extends Error {
+  constructor(
+    readonly limit: 'count' | 'bytes',
+    readonly observed: number,
+  ) {
+    super(limit === 'count' ? 'Too many part headers' : 'Part headers too large');
+  }
+}
+
+type Delimiter =
+  | { readonly kind: 'pending' | 'data' }
+  | { readonly kind: 'next' | 'close'; readonly length: number };
+
+const PENDING: Delimiter = { kind: 'pending' };
+const DATA: Delimiter = { kind: 'data' };
+
+/**
+ * Classifies the bytes after a matched `CRLF--boundary`: `--`? LWSP* CRLF
+ * makes it a delimiter (`close` with the dashes, else `next`); anything else
+ * means the match was body data. At EOF a close delimiter needs no CRLF.
+ */
+function classifyDelimiter(s: Buffer, eof: boolean): Delimiter {
+  const close = s[0] === 45 && s[1] === 45;
+  if (!close && s[0] === 45 && s.length === 1) return eof ? DATA : PENDING;
+  let i = close ? 2 : 0;
+  while (i < s.length && (s[i] === 32 || s[i] === 9)) i++;
+  if (i < s.length && s[i] !== 13) return DATA;
+  if (i + 1 < s.length) {
+    return s[i + 1] === 10 ? { kind: close ? 'close' : 'next', length: i + 2 } : DATA;
+  }
+  if (eof) return close ? { kind: 'close', length: s.length } : DATA;
+  return s.length < MAX_SUFFIX ? PENDING : DATA;
+}
 
 export class MultipartPartStream extends Readable {
+  /** True once the parser has pushed the whole body (its delimiter arrived). */
+  complete = false;
+
   constructor(private readonly onRead: () => void) {
     super();
   }
@@ -23,21 +74,21 @@ export class MultipartPartStream extends Readable {
   }
 }
 
-function parseHeaders(block: Buffer): PartHeaders {
+function parseHeaders(block: Buffer, maxPairs: number): PartHeaders {
   const headers: PartHeaders = Object.create(null) as PartHeaders;
   if (block.length === 0) return headers;
   const lines = block.toString('latin1').split('\r\n');
-  let previousName: string | undefined;
+  // The values array of the last header line, which a folded line extends.
+  let previousValues: string[] | undefined;
   let count = 0;
 
   for (const line of lines) {
     if (line.startsWith(' ') || line.startsWith('\t')) {
-      if (previousName === undefined) {
+      if (previousValues === undefined) {
         throw new Error('Unexpected folded header value');
       }
-      const values = headers[previousName];
-      if (values === undefined) throw new Error('Malformed part header');
-      values[values.length - 1] += line;
+      const last = previousValues.length - 1;
+      previousValues[last] = `${previousValues[last] ?? ''}${line}`.replace(/[ \t]+$/, '');
       continue;
     }
 
@@ -47,15 +98,22 @@ function parseHeaders(block: Buffer): PartHeaders {
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) {
       throw new Error('Malformed part header');
     }
-    const value = line.slice(colon + 1).replace(/^[ \t]/, '');
+    // Whitespace around a field value is not part of it (RFC 5322 / 9110).
+    const value = line
+      .slice(colon + 1)
+      .replace(/^[ \t]+/, '')
+      .replace(/[ \t]+$/, '');
     if (/[\x00-\x08\x0a-\x1f\x7f]/.test(value)) {
       throw new Error('Malformed part header');
     }
-    const key = name.toLowerCase();
-    (headers[key] ??= []).push(value);
-    previousName = key;
-    if (++count > MAX_HEADER_PAIRS) throw new Error('Too many part headers');
+    const values = (headers[name.toLowerCase()] ??= []);
+    values.push(value);
+    previousValues = values;
+    count++;
   }
+  // The block is already bounded by maxHeaderBytes, so count it in full and
+  // report the exact number of lines.
+  if (count > maxPairs) throw new HeaderLimitError('count', count);
 
   return headers;
 }
@@ -69,6 +127,9 @@ export class MultipartParser extends Writable {
   private headerBytes = Buffer.alloc(0);
   private suffix = Buffer.alloc(0);
   private candidate = false;
+  // The pending candidate ended a body-less part's header block, so the
+  // needle's leading CRLF is that block's blank line, not body data.
+  private headerEndInNeedle = false;
   private pausedPart: MultipartPartStream | undefined;
   private pendingWrite: (() => void) | undefined;
   private openParts = 0;
@@ -81,7 +142,10 @@ export class MultipartParser extends Writable {
   private reported = 0;
   private tail = Buffer.alloc(0);
 
-  constructor(boundary: string) {
+  constructor(
+    boundary: string,
+    private readonly limits: HeaderLimits,
+  ) {
     super();
     if (boundary.length === 0) throw new TypeError('Boundary required');
     this.needle = Buffer.from(`\r\n--${boundary}`);
@@ -94,7 +158,20 @@ export class MultipartParser extends Writable {
       }
       if (this.state === 'done') return;
       if (matched) {
-        if (this.state === 'headers') throw new Error('Malformed part header');
+        // A still-pending suffix (`-`, `--`, LWSP) is settled by the CRLF
+        // that starts this match. As a delimiter, the needle is consumed as
+        // the bytes that follow it; as body data, both matches are body.
+        if (this.candidate) {
+          const settled = classifyDelimiter(Buffer.concat([this.suffix, INITIAL_CRLF]), false);
+          if (settled.kind !== 'data') {
+            this.consume(this.needle);
+            return;
+          }
+          this.flushNonDelimiter(this.suffix);
+          this.suffix = Buffer.alloc(0);
+          this.headerEndInNeedle = false;
+        }
+        if (this.state === 'headers') this.endHeadersAtDelimiter();
         this.candidate = true;
       }
     });
@@ -124,15 +201,14 @@ export class MultipartParser extends Writable {
       callback(error instanceof Error ? error : new Error(String(error)));
       return;
     }
-    if (this.candidate && this.suffix.equals(CLOSING_DASHES)) {
-      this.candidate = false;
+    if (this.candidate && classifyDelimiter(this.suffix, true).kind === 'close') {
       this.endPart();
       this.state = 'done';
     }
     if (this.state !== 'done') {
-      const error = new Error('Unexpected end of multipart data');
-      this.endPart();
-      callback(error);
+      // The open part is left unended: the caller fails it with this error,
+      // so a reader never mistakes a cut body for a complete one.
+      callback(new UnexpectedEndError());
       return;
     }
     if (this.openParts === 0) callback();
@@ -159,14 +235,9 @@ export class MultipartParser extends Writable {
   private peekDelimiter(): void {
     if (!this.candidate || this.state !== 'body' || this.part === undefined) return;
     const held = this.pushed - this.reported;
-    const pending = Buffer.concat([
-      this.suffix,
-      held > 0 ? this.tail.subarray(this.tail.length - held) : Buffer.alloc(0),
-    ]);
-    const confirmed =
-      pending.subarray(0, 2).equals(INITIAL_CRLF) ||
-      pending.subarray(0, 4).equals(CLOSING_CRLF);
-    if (confirmed) this.endPart();
+    const pending = Buffer.concat([this.suffix, this.tail.subarray(this.tail.length - held)]);
+    const { kind } = classifyDelimiter(pending, false);
+    if (kind === 'next' || kind === 'close') this.endPart();
   }
 
   private resumeWrite(part: MultipartPartStream): void {
@@ -181,6 +252,7 @@ export class MultipartParser extends Writable {
     const part = this.part;
     if (part === undefined) return;
     this.part = undefined;
+    part.complete = true;
     part.push(null);
   }
 
@@ -209,63 +281,87 @@ export class MultipartParser extends Writable {
 
   private consume(data: Buffer): void {
     if (this.candidate) {
-      if (this.suffix.length < 2) {
-        const taken = Math.min(2 - this.suffix.length, data.length);
-        this.suffix = Buffer.concat([this.suffix, data.subarray(0, taken)]);
-        data = data.subarray(taken);
+      const prior = this.suffix;
+      const combined = Buffer.concat([prior, data.subarray(0, MAX_SUFFIX - prior.length)]);
+      const delimiter = classifyDelimiter(combined, false);
+      if (delimiter.kind === 'pending') {
+        this.suffix = combined;
+        return;
       }
-      if (this.suffix.length < 2) return;
-
-      if (this.suffix.equals(CLOSING_DASHES)) {
-        if (data.length === 0) return;
-        if (data[0] === 13) {
-          this.suffix = CLOSING_CR;
-          data = data.subarray(1);
-          if (data.length === 0) return;
-        }
-      }
-      if (this.suffix.equals(CLOSING_CR) && data.length === 0) return;
-
-      const suffix = this.suffix;
       this.suffix = Buffer.alloc(0);
       this.candidate = false;
-      if (suffix.equals(INITIAL_CRLF)) {
-        this.endPart();
-        this.beginPart();
-      } else if (suffix.equals(CLOSING_CR) && data[0] === 10) {
-        data = data.subarray(1);
+      const headerEndInNeedle = this.headerEndInNeedle;
+      this.headerEndInNeedle = false;
+      if (delimiter.kind === 'close') {
         this.endPart();
         this.state = 'done';
         return;
-      } else if (this.state === 'headers') {
-        data = Buffer.concat([this.needle, suffix, data]);
-      } else if (this.state === 'body') {
-        this.consumeBody(this.needle);
-        this.consumeBody(suffix);
+      }
+      if (delimiter.kind === 'next') {
+        data = data.subarray(delimiter.length - prior.length);
+        this.endPart();
+        this.beginPart();
+      } else {
+        this.flushNonDelimiter(prior, headerEndInNeedle);
       }
     }
 
     if (this.state === 'headers') {
+      const { maxHeaderBytes, maxHeaderPairs } = this.limits;
       const pending = this.headerBytes.length;
-      const scan = data.subarray(0, MAX_HEADER_BYTES + HEADER_END.length - pending);
+      const scan = data.subarray(0, maxHeaderBytes + HEADER_END.length - pending);
       const combined = Buffer.concat([this.headerBytes, scan]);
       const empty = combined.length >= 2 && combined.subarray(0, 2).equals(INITIAL_CRLF);
       const end = empty ? 0 : combined.indexOf(HEADER_END);
       if (end < 0) {
-        if (combined.length > MAX_HEADER_BYTES) throw new Error('Part headers too large');
+        if (combined.length > maxHeaderBytes) {
+          throw new HeaderLimitError('bytes', combined.length);
+        }
         this.headerBytes = combined;
         return;
       }
-      if (end > MAX_HEADER_BYTES) throw new Error('Part headers too large');
-      const headers = parseHeaders(combined.subarray(0, end));
-      const rawHeaders = Buffer.from(combined.subarray(0, end + (empty ? 2 : HEADER_END.length)));
+      const rawLength = end + (empty ? 2 : HEADER_END.length);
+      if (rawLength > maxHeaderBytes) throw new HeaderLimitError('bytes', rawLength);
+      const headers = parseHeaders(combined.subarray(0, end), maxHeaderPairs);
+      const rawHeaders = Buffer.from(combined.subarray(0, rawLength));
       this.headerBytes = Buffer.alloc(0);
       this.state = 'body';
       this.part?.emit('header', headers, rawHeaders);
-      this.consumeBody(data.subarray(end + (empty ? 2 : HEADER_END.length) - pending));
+      this.consumeBody(data.subarray(rawLength - pending));
     } else if (this.state === 'body') {
       this.consumeBody(data);
     }
+  }
+
+  /**
+   * A needle match that turned out not to be a delimiter belongs to the
+   * body. In the preamble it is discarded like any other preamble text.
+   */
+  private flushNonDelimiter(prior: Buffer, headerEndInNeedle = this.headerEndInNeedle): void {
+    if (this.state !== 'body') return;
+    this.consumeBody(headerEndInNeedle ? this.needle.subarray(INITIAL_CRLF.length) : this.needle);
+    this.consumeBody(prior);
+  }
+
+  /**
+   * A delimiter candidate arrived before the header block's blank line.
+   * RFC 2046 lets a body part be headers only (`headers [CRLF *OCTET]`), so
+   * the needle's CRLF ends the block, which must itself end in CRLF or be
+   * empty. Whether the part also has a body is settled by the candidate.
+   */
+  private endHeadersAtDelimiter(): void {
+    const block = this.headerBytes;
+    if (block.length > 0 && !block.subarray(-INITIAL_CRLF.length).equals(INITIAL_CRLF)) {
+      throw new Error('Malformed part header');
+    }
+    const rawLength = block.length + INITIAL_CRLF.length;
+    if (rawLength > this.limits.maxHeaderBytes) throw new HeaderLimitError('bytes', rawLength);
+    const fields = block.subarray(0, Math.max(0, block.length - INITIAL_CRLF.length));
+    const headers = parseHeaders(fields, this.limits.maxHeaderPairs);
+    this.headerBytes = Buffer.alloc(0);
+    this.state = 'body';
+    this.headerEndInNeedle = true;
+    this.part?.emit('header', headers, Buffer.concat([block, INITIAL_CRLF]));
   }
 
   private consumeBody(data: Buffer): void {

@@ -42,7 +42,10 @@ export interface StreamingMultipartPart {
 
   /**
    * Lowercased part headers as flat strings. Names are normalized to
-   * lowercase; repeated values are joined with `, `.
+   * lowercase; values have surrounding spaces and tabs trimmed, and
+   * repeated values are joined with `, `. Like Node's
+   * `IncomingMessage.headers`, the object has a `null` prototype, so only
+   * received headers are present (`headers.constructor` is `undefined`).
    *
    * Reads are `string | undefined` due to `noUncheckedIndexedAccess`.
    */
@@ -68,17 +71,24 @@ export interface StreamingMultipartPart {
   readonly contentId?: string | undefined;
 
   /**
-   * Pre-extracted `content-length` parsed via `parseInt(_, 10)`, or
-   * `undefined` if the header is absent or non-numeric. Note: parser streams
+   * Pre-extracted `content-length` as a non-negative integer, or
+   * `undefined` if the header is absent or not a plain decimal integer
+   * (e.g. `12abc` or `-5`). Note: parser streams
    * regardless — this value is informational, not a contract.
    */
   readonly contentLength?: number | undefined;
 
   /**
    * The streaming body of this part as a Node `Readable`. Backed directly by
-   * parser's per-part stream — no intermediate buffering. The parser applies
+   * parser's per-part stream (with `maxPartBytes`, through a counting
+   * Transform) — no intermediate buffering. The parser applies
    * backpressure when this stream's buffer fills. Callers should consume
    * (drain, pipe, or destroy) before requesting the next part.
+   *
+   * If the operation fails (timeout, abort, truncation, source error, cap
+   * overflow) before this body's closing delimiter arrives, the body is
+   * destroyed with that same error, so a reader blocked on it rejects
+   * instead of hanging. A body that was already complete stays readable.
    */
   readonly body: Readable;
 }
@@ -189,16 +199,17 @@ export type Logger = (event: {
 export interface ParseMultipartOptions {
   /**
    * REQUIRED. Idle timeout (ms). Resets on every chunk received from the
-   * source `Readable` (per-chunk `'data'` listener; FR-DR-A-025).
-   * Validated as a positive finite integer in the inclusive range
+   * source `Readable` (per-chunk `'data'` listener; FR-DR-A-025), and stops
+   * once the source has ended. Validated as a positive finite integer in the inclusive range
    * `[1, 2_147_483_647]` (NFR-DR-S-009 — Node clamps `setTimeout` delays
    * above `2^31 - 1`).
    */
   idleTimeoutMs: number;
 
   /**
-   * REQUIRED. Total timeout (ms), measured from the call. Same validation
-   * rules as `idleTimeoutMs`.
+   * REQUIRED. Total timeout (ms), measured from the call (for
+   * `fetchAndHandleMultipart`, that includes waiting for response headers).
+   * Same validation rules as `idleTimeoutMs`.
    */
   totalTimeoutMs: number;
 
@@ -230,8 +241,12 @@ export interface ParseMultipartOptions {
   logger?: Logger | undefined;
 
   /**
-   * Per-part body-size cap (NFR-DR-S-001). Omit (default) for no cap. Must
-   * be a positive finite integer when set.
+   * Per-part body-size cap (NFR-DR-S-001). Omit (default) for no cap. On
+   * overflow the part's body errors with `MultipartPartTooLargeError` and the
+   * iterator rejects with the same instance.
+   *
+   * Every cap option must be a positive safe integer when set; anything else
+   * rejects with a `TypeError` from the first `.next()`.
    */
   maxPartBytes?: number | undefined;
 

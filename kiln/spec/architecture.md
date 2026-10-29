@@ -104,7 +104,6 @@ The library has exactly three layers; each layer's source files live at the path
 │  Layer C: internal utilities (pure where possible)                 │
 │  src/internal/                                                     │
 │  - flatten-headers.ts:    Buffer/array → string                    │
-│  - sanitize-filename.ts:  FR-023 path-safe rule                    │
 │  - derive-name.ts:        Content-ID → filename hint               │
 │  - queue-notifier.ts:     The push/wait bridge                     │
 │  - timers.ts:             setupTimers(...) → TimerState            │
@@ -304,7 +303,7 @@ The implementation cost is: `validatePositiveTimeout` (already centralized in La
 
 ### 5.9 Why `extractBoundary` is the only public utility
 
-FR-016. The other utilities (`flattenDicerHeaders`, `flattenHeaderValue`, `sanitizeFileName`, `deriveNameFromContentId`) are tightly coupled to dicer's internal data shape and to a specific naming convention. Exporting them creates an obligation to never break their signatures, and they are not useful outside the multipart-parsing context.
+FR-016. The other utilities (`flattenDicerHeaders`, `flattenHeaderValue`, `deriveNameFromContentId`) are tightly coupled to dicer's internal data shape and to a specific naming convention. Exporting them creates an obligation to never break their signatures, and they are not useful outside the multipart-parsing context.
 
 `extractBoundary`, by contrast, is a pure RFC-2046 parser useful in many adjacent contexts (e.g. when a caller has a `Content-Type` string but is using a different downstream parser). Public, documented, stable.
 
@@ -401,7 +400,7 @@ NFR-005: zero silent catches anywhere. CI grep gate will enforce.
 
 (Full content in `kiln/spec/test-plan.md`.) Briefly:
 
-- **Unit tests** in `tests/unit/` for pure functions (no I/O): `extractBoundary`, `flattenHeaderValue`, `flattenDicerHeaders`, `sanitizeFileName`, `validatePositiveTimeout`, error class properties.
+- **Unit tests** in `tests/unit/` for pure functions (no I/O): `extractBoundary`, `flattenHeaderValue`, `flattenDicerHeaders`, `validatePositiveTimeout`, error class properties.
 - **Integration tests** in `tests/integration/` for parser/fetch behavior. These use real `Readable.from(buffer)` for input and a small in-process `node:http` server (`http.createServer`) for `fetchAndHandleMultipart` tests. **No mocked sources** where a real `Readable` works (per `kiln/standards/testing.md`).
 - **Listener-leak harness** patches `Dicer.prototype.emit` (per existing reference test) to capture all part `Readable`s and dicer instances; assertions on `listenerCount` and `destroyed` flags after every termination path.
 - **Fault-injection harness** for timeouts and abort uses `vi.useFakeTimers` and a `Readable` that emits a single byte then sits silent.

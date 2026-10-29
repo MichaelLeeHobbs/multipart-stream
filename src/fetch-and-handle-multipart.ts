@@ -37,14 +37,11 @@
  * assertion) with the final `bytes` / `elapsedMs` / `rateBps`.
  */
 
-import { MultipartAbortError } from './errors.js';
-import { defaultLogger } from './internal/default-logger.js';
-import {
-  summarizeError,
-  truncateForErrorEmbed,
-} from './internal/format-error-embed.js';
-import { validatePositiveTimeout } from './internal/validate-timeout.js';
-import { parseMultipartRelated } from './parse-multipart-related.js';
+import { MultipartAbortError, MultipartTotalTimeoutError } from './errors.js';
+import { resolveLogger } from './internal/default-logger.js';
+import { summarizeError, truncateForErrorEmbed } from './internal/format-error-embed.js';
+import { validateOptionalCap, validatePositiveTimeout } from './internal/validate-timeout.js';
+import { parseMultipartRelatedFrom } from './parse-multipart-related.js';
 import type {
   Logger,
   MultipartFetchResult,
@@ -78,8 +75,8 @@ import type {
  * @throws {Error} `multipart: pass signal via options.signal — fetchInit.signal
  *   is reserved for internal use` when `options.fetchInit.signal` is set
  *   (FR-024).
- * @throws {MultipartAbortError} synchronously when `options.signal?.aborted`
- *   is `true` at call time (FR-009). `fetch` is NEVER invoked on this path
+ * @throws {MultipartAbortError} (as a rejection, before `fetch` is called)
+ *   when `options.signal?.aborted` is `true` at call time (FR-009). `fetch` is NEVER invoked on this path
  *   — T-013 spies on `globalThis.fetch` to verify.
  * @throws {Error} `multipart: response Content-Type is not multipart/related;
  *   got <actual>` when the response Content-Type doesn't start with
@@ -100,113 +97,108 @@ import type {
  */
 export async function fetchAndHandleMultipart<T>(
   url: string | URL,
-  options: MultipartHandlerOptions<T>,
+  callerOptions: MultipartHandlerOptions<T>,
 ): Promise<MultipartFetchResult<T>> {
+  // A missing options bag reads as empty, so it fails the checks below
+  // with their documented messages.
+  const options: Partial<MultipartHandlerOptions<T>> = callerOptions ?? {};
+  // 3. Wallclock. Layer B owns the result wallclock (architecture.md §3),
+  //    and the total timeout is measured from here (FR-008).
+  const startMs = Date.now();
+
   // 1. Synchronous validation (FR-005 / FR-006 / FR-024 / FR-009).
   //    These all run BEFORE fetch is invoked — T-013 spy contract.
-  if (typeof options.parser !== 'function') {
+  const parser = options.parser;
+  if (typeof parser !== 'function') {
     throw new TypeError('multipart: options.parser is required');
   }
+  const totalTimeoutMs = options.totalTimeoutMs;
   validatePositiveTimeout('idleTimeoutMs', options.idleTimeoutMs);
-  validatePositiveTimeout('totalTimeoutMs', options.totalTimeoutMs);
+  validatePositiveTimeout('totalTimeoutMs', totalTimeoutMs);
 
   // FR-024 runtime check. The static `Omit<RequestInit, 'signal'>` on
   // MultipartHandlerOptions.fetchInit handles the type-level rejection;
   // the runtime check catches dynamic spreads or `as any` consumers who
   // launder past TypeScript.
-  if (
-    options.fetchInit !== undefined &&
-    'signal' in options.fetchInit &&
-    (options.fetchInit as { signal?: unknown }).signal !== undefined
-  ) {
+  const fetchInit = options.fetchInit ?? {};
+  if ('signal' in fetchInit && (fetchInit as { signal?: unknown }).signal !== undefined) {
     throw new Error(
       'multipart: pass signal via options.signal — fetchInit.signal is reserved for internal use',
     );
   }
 
+  // Caps are validated again by Layer A; checking here keeps every
+  // validation error ahead of the network call.
+  validateOptionalCap('maxPartBytes', options.maxPartBytes);
+  validateOptionalCap('maxParts', options.maxParts);
+  validateOptionalCap('maxHeadersPerPart', options.maxHeadersPerPart);
+  validateOptionalCap('maxHeaderBytesPerPart', options.maxHeaderBytesPerPart);
+
   // FR-009 already-aborted: throw synchronously with the verbatim caller
   // reason (F-S-006). Fetch is NEVER called on this path.
-  if (options.signal?.aborted === true) {
-    throw new MultipartAbortError(options.signal.reason);
+  const callerSignal = options.signal;
+  if (callerSignal?.aborted === true) {
+    throw new MultipartAbortError(callerSignal.reason);
   }
 
-  // 2. Logger fallback (FR-018 / JC-2). Resolved once and used at every
-  //    Layer-B logger site (onProgress catch, completion-tick catch).
-  //    Note: the SAME logger is forwarded to parseMultipartRelated so
-  //    Layer A's late-emit / FR-017 sites flow through the caller's
-  //    pipeline too.
-  const logger: Logger = options.logger ?? defaultLogger;
+  // 2. Logger fallback (FR-018 / JC-2), used for the body-cancel site. The
+  //    caller's logger is forwarded to parseMultipartRelated as-is.
+  const logger: Logger = resolveLogger(options.logger);
 
-  // 3. Wallclock + bytes accumulator. Layer B owns the result wallclock
-  //    per architecture.md §3 ("owns wallclock for elapsedMs/bytes").
-  const startMs = Date.now();
+  // 4. Always supply our own onProgress so we can capture the byte count.
+  //    Layer A fires it per part and once at completion, and wraps it in
+  //    its own try/catch + logger.warn (FR-017), so a throwing caller
+  //    callback is caught there — we only forward.
+  const callerOnProgress = options.onProgress;
   let lastBytes = 0;
-
-  // 4. Always supply our own onProgress to parseMultipartRelated so we
-  //    can capture lastBytes — even when the caller didn't supply one.
-  //    When they did, forward the snapshot through with a try/catch that
-  //    routes via the resolved logger (FR-017 silent-catch replacement).
-  //
-  //    NOTE: parse-multipart-related.ts already wraps caller's onProgress
-  //    in its own try/catch + logger.warn. To avoid a double-log when the
-  //    caller's callback throws, we DO NOT also catch here — Layer A's
-  //    catch site is the canonical one. We only forward.
-  //
-  //    Architecture decision: the inner onProgress closure unconditionally
-  //    captures lastBytes; the call-through to options.onProgress lives
-  //    inside parseMultipartRelated's fireProgress (which already wraps
-  //    in try/catch + logger.warn). To get BOTH behaviors (capture bytes
-  //    AND let Layer A do the catching), we pass a wrapper that captures
-  //    bytes then defers to options.onProgress directly. Layer A's
-  //    fireProgress wraps THIS wrapper, so a throw from options.onProgress
-  //    is caught at the Layer A site and routed through Layer A's logger
-  //    (which is the same `logger` we resolved above).
   const onProgressForLayerA = (snap: ProgressSnapshot): void => {
     lastBytes = snap.bytes;
-    if (options.onProgress !== undefined) {
-      options.onProgress(snap);
-    }
+    callerOnProgress?.(snap);
   };
 
-  // 5. fetch — forward fetchInit (without signal — caller's signal is
-  //    threaded through as our `signal` arg). architecture.md §4.2 step 2
-  //    explicitly: "caller signal forwarded raw; timers live in Layer A".
-  //
-  //    A pre-fetch abort fires `fetch` to reject with an AbortError-
-  //    flavored DOMException; we surface that as MultipartAbortError if
-  //    the caller's signal is now aborted (race-safe: the FR-009 check
-  //    above already short-circuits the synchronously-aborted case).
+  // 5. fetch. The caller's signal is forwarded raw; the idle/total timers
+  //    live in Layer A, except that the total budget must also cover the
+  //    wait for response headers, so an internal timer aborts fetch when
+  //    the budget runs out first.
+  const totalBudget = new AbortController();
+  const totalTimer = setTimeout(() => {
+    totalBudget.abort();
+  }, totalTimeoutMs);
+  const fetchSignal =
+    callerSignal === undefined
+      ? totalBudget.signal
+      : AbortSignal.any([callerSignal, totalBudget.signal]);
   let res: Response;
   try {
-    // Conditional spread: under exactOptionalPropertyTypes, passing
-    // `signal: undefined` to fetch's RequestInit is rejected if the
-    // declared type is non-optional. Always include the field — fetch
-    // accepts AbortSignal | null | undefined at runtime.
-    const init: RequestInit = {
-      ...(options.fetchInit ?? {}),
-      ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    };
-    res = await fetch(url, init);
+    res = await fetch(url, { ...fetchInit, signal: fetchSignal });
   } catch (err) {
-    // If the caller signal aborted during fetch, surface as
-    // MultipartAbortError with the caller-verbatim reason (F-S-006).
-    // Re-read the signal because TS's narrowing assumes the FR-009
-    // already-aborted check above means the signal can't have aborted —
-    // but the caller can fire it asynchronously between then and now.
-    const sig = options.signal;
-    if (sig?.aborted) {
-      throw new MultipartAbortError(sig.reason);
+    // Re-read the signals: the caller can abort asynchronously after the
+    // FR-009 check above (the annotation stops TS keeping that narrowing).
+    const signalNow: AbortSignal | undefined = callerSignal;
+    if (signalNow?.aborted === true) {
+      throw new MultipartAbortError(signalNow.reason);
+    }
+    if (totalBudget.signal.aborted) {
+      throw new MultipartTotalTimeoutError(totalTimeoutMs, { cause: err });
     }
     throw err;
+  } finally {
+    clearTimeout(totalTimer);
   }
 
-  // 6. FR-021 — Content-Type validation BEFORE parser construction. The
-  //    test-harness asserts `parser-activity.parserInstances().length === 0`
-  //    on this path (T-035). Case-insensitive prefix check per FR-021;
-  //    the offending value is run through `truncateForErrorEmbed` (the
-  //    full sanitizer per NFR-DR-S-006).
+  // 6. FR-021 — Content-Type validation BEFORE parser construction (T-035
+  //    asserts no parser instance on this path). Case-insensitive prefix
+  //    check; the offending value is sanitized per NFR-DR-S-006. The body
+  //    is cancelled so the connection is released (US-007).
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.toLowerCase().startsWith('multipart/related')) {
+    res.body?.cancel().catch((err: unknown) => {
+      logger({
+        level: 'warn',
+        msg: 'multipart: cancelling the response body failed',
+        meta: { errSummary: summarizeError(err) },
+      });
+    });
     throw new Error(
       `multipart: response Content-Type is not multipart/related; got ${truncateForErrorEmbed(contentType)}`,
     );
@@ -224,13 +216,11 @@ export async function fetchAndHandleMultipart<T>(
   //    exactOptionalPropertyTypes for fields the caller may have omitted.
   const parseOpts: ParseMultipartOptions = {
     idleTimeoutMs: options.idleTimeoutMs,
-    totalTimeoutMs: options.totalTimeoutMs,
+    totalTimeoutMs,
     onProgress: onProgressForLayerA,
-    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(callerSignal !== undefined ? { signal: callerSignal } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
-    ...(options.maxPartBytes !== undefined
-      ? { maxPartBytes: options.maxPartBytes }
-      : {}),
+    ...(options.maxPartBytes !== undefined ? { maxPartBytes: options.maxPartBytes } : {}),
     ...(options.maxParts !== undefined ? { maxParts: options.maxParts } : {}),
     ...(options.maxHeadersPerPart !== undefined
       ? { maxHeadersPerPart: options.maxHeadersPerPart }
@@ -241,21 +231,15 @@ export async function fetchAndHandleMultipart<T>(
   };
 
   const parts: T[] = [];
-  for await (const part of parseMultipartRelated(res, parseOpts)) {
-    const value = await invokeParser(options.parser, part);
+  for await (const part of parseMultipartRelatedFrom(res, parseOpts, startMs)) {
+    const value = await invokeParser(parser, part);
     if (value !== undefined) {
       parts.push(value);
     }
-    // FR-014: when the parser returns undefined OR the parser returned a
-    // value without touching part.body, the LIBRARY drains the body so
-    // parser can advance its state machine to the next part. Without this,
-    // a parser that always returns undefined hangs the multipart stream
-    // (parser's per-part Readable buffers indefinitely; the closing
-    // boundary never makes it through; the truncation detector
-    // mis-fires). Draining is a no-op if the parser already drained.
+    // FR-014: when the parser returned without draining part.body, the
+    // LIBRARY drains it so the multipart stream can advance to the next
+    // part. Draining is a no-op if the parser already drained.
     if (!part.body.destroyed && part.body.readable) {
-      // Drain by iterating to end. The for-await is the canonical
-      // drain idiom for a Node Readable in flowing mode.
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _chunk of part.body) {
         // discard
@@ -263,28 +247,9 @@ export async function fetchAndHandleMultipart<T>(
     }
   }
 
-  // 9. Final completion-tick onProgress (T-014 full assertion). Caller
-  //    exceptions are caught and routed via the resolved logger — same
-  //    contract as the per-part site in Layer A.
+  // 9. Resolve with the FR-DR-A-029 shape — no response field. Layer A's
+  //    completion tick has already reported the final byte count.
   const elapsedMs = Date.now() - startMs;
-  if (options.onProgress !== undefined) {
-    const rateBps =
-      elapsedMs <= 0 ? 0 : Math.round((lastBytes * 1000) / elapsedMs);
-    try {
-      options.onProgress({ bytes: lastBytes, elapsedMs, rateBps });
-    } catch (err) {
-      // FR-017 silent-catch replacement — onProgress completion-tick
-      // site lives at Layer B (the per-yielded-part site lives at Layer
-      // A's fireProgress). Both flow through the same logger contract.
-      logger({
-        level: 'warn',
-        msg: 'multipart: onProgress threw on completion tick',
-        meta: { errSummary: summarizeError(err) },
-      });
-    }
-  }
-
-  // 10. Resolve with the FR-DR-A-029 shape — no response field.
   return { parts, bytes: lastBytes, elapsedMs, status, headers };
 }
 

@@ -18,6 +18,7 @@
  */
 
 import type { Logger } from '../types.js';
+import { summarizeError } from './format-error-embed.js';
 
 /**
  * Default `Logger` used when the caller did not supply one.
@@ -42,11 +43,11 @@ export const defaultLogger: Logger = (event) => {
 };
 
 /**
- * Resolve a caller-supplied `Logger` to a defined function. When the caller
- * supplies one, return it as-is; when they omit it, return
- * {@link defaultLogger}. Library code calls the resolved logger uniformly
- * with event-style payloads — the internal `defaultLogger` is responsible
- * for re-shaping to the positional `console.warn` form.
+ * Resolve a caller-supplied `Logger` to a defined function: {@link
+ * defaultLogger} when omitted, otherwise the caller's logger wrapped so that
+ * a throwing logger is reported to the default sink instead of escaping from
+ * a stream listener or a promise callback. Library code calls the resolved
+ * logger uniformly with event-style payloads.
  *
  * @param logger - Caller-supplied logger (or undefined).
  * @returns The resolved logger function.
@@ -54,5 +55,16 @@ export const defaultLogger: Logger = (event) => {
  * @internal
  */
 export function resolveLogger(logger: Logger | undefined): Logger {
-  return logger ?? defaultLogger;
+  if (logger === undefined) return defaultLogger;
+  return (event) => {
+    try {
+      logger(event);
+    } catch (err) {
+      defaultLogger({
+        level: 'warn',
+        msg: 'multipart: logger threw',
+        meta: { event: event.msg, errSummary: summarizeError(err) },
+      });
+    }
+  };
 }

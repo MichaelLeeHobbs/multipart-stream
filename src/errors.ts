@@ -126,9 +126,7 @@ export class MultipartTruncatedError extends Error {
    */
   constructor(bytesReceived: number, options?: ErrorOptions) {
     super(
-      `multipart: stream ended before closing boundary (${String(
-        bytesReceived,
-      )}B received)`,
+      `multipart: stream ended before closing boundary (${String(bytesReceived)}B received)`,
       options,
     );
     this.bytesReceived = bytesReceived;
@@ -190,7 +188,12 @@ export interface MultipartHeadersTooLargeInfo {
   readonly partIndex: number;
   /** The configured cap. */
   readonly cap: number;
-  /** Observed value at trip-time. */
+  /**
+   * Observed value at trip-time: the part's header-line count, or for
+   * `'bytes'` the header bytes buffered when the cap tripped (the block is
+   * rejected as soon as it passes the cap, so this can be less than the
+   * full block).
+   */
   readonly observed: number;
 }
 

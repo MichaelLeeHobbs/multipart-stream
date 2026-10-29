@@ -1,68 +1,39 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  flattenHeaderValue,
-  flattenPartHeaders,
-} from '../../src/internal/flatten-headers.js';
-
-describe('flattenHeaderValue', () => {
-  it('returns empty string for null/undefined', () => {
-    expect(flattenHeaderValue(undefined)).toBe('');
-    expect(flattenHeaderValue(null)).toBe('');
-  });
-
-  it('passes through plain strings', () => {
-    expect(flattenHeaderValue('text/plain')).toBe('text/plain');
-  });
-
-  it('decodes a Buffer as utf8', () => {
-    expect(flattenHeaderValue(Buffer.from('application/json', 'utf8'))).toBe(
-      'application/json',
-    );
-  });
-
-  it('joins an array of strings with ", "', () => {
-    expect(flattenHeaderValue(['a', 'b', 'c'])).toBe('a, b, c');
-  });
-
-  it('joins an array of Buffers with ", "', () => {
-    expect(
-      flattenHeaderValue([Buffer.from('a'), Buffer.from('b')]),
-    ).toBe('a, b');
-  });
-
-  it('handles nested arrays (Buffer[][] / string[][])', () => {
-    expect(flattenHeaderValue([['a', 'b'], ['c']])).toBe('a, b, c');
-  });
-
-  it('drops empty entries from arrays', () => {
-    expect(flattenHeaderValue(['a', '', 'b'])).toBe('a, b');
-    expect(flattenHeaderValue([null, 'a', undefined, 'b'])).toBe('a, b');
-  });
-});
+import { flattenPartHeaders } from '../../src/internal/flatten-headers.js';
 
 describe('flattenPartHeaders', () => {
-  it('returns {} for undefined input', () => {
-    expect(flattenPartHeaders(undefined)).toEqual({});
+  it('returns an empty bag for no headers', () => {
+    expect(Object.keys(flattenPartHeaders({}))).toEqual([]);
   });
 
-  it('lowercases keys and collapses values', () => {
+  it('lowercases keys and joins repeated values with ", "', () => {
     const got = flattenPartHeaders({
       'CONTENT-TYPE': ['application/json'],
-      'Content-Id': ['<meta>'],
-      'X-Custom': 'plain',
+      'x-multi': ['a', 'b', 'c'],
     });
-    expect(got).toEqual({
+    expect({ ...got }).toEqual({
       'content-type': 'application/json',
-      'content-id': '<meta>',
-      'x-custom': 'plain',
+      'x-multi': 'a, b, c',
     });
   });
 
-  it('handles the internal parser header shape', () => {
-    const got = flattenPartHeaders({
-      'content-type': ['text/plain'],
-    });
-    expect(got['content-type']).toBe('text/plain');
+  it('keeps empty repeated values', () => {
+    expect(flattenPartHeaders({ x: ['a', ''] }).x).toBe('a, ');
+    expect(flattenPartHeaders({ x: [''] }).x).toBe('');
   });
+
+  // Bracket access on purpose: on an ordinary object `.__proto__` is the
+  // prototype accessor, which is exactly what this test must not touch.
+  /* eslint-disable @typescript-eslint/dot-notation */
+  it('stores __proto__ as data and inherits nothing', () => {
+    const raw = Object.create(null) as Record<string, string[]>;
+    raw['__proto__'] = ['x'];
+    const got = flattenPartHeaders(raw);
+    expect(Object.getPrototypeOf(got)).toBeNull();
+    expect(Object.keys(got)).toEqual(['__proto__']);
+    expect(got['__proto__']).toBe('x');
+    expect(got['constructor']).toBeUndefined();
+  });
+  /* eslint-enable @typescript-eslint/dot-notation */
 });

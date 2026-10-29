@@ -44,22 +44,19 @@ export interface NormalizeOptions {
 }
 
 /**
- * Detect a Web `Response` without depending on the global `Response`
- * constructor for `instanceof` checks (Node 20.18+ has it, but defensive
- * duck-typing covers test fixtures that emulate the shape).
+ * Detect a Web `Response` by shape rather than `instanceof Response`, so test
+ * fixtures and other fetch implementations that emulate it are accepted (a
+ * real `Response` always matches the shape).
  *
  * @internal
  */
 function looksLikeResponse(input: unknown): input is Response {
-  if (typeof Response !== 'undefined' && input instanceof Response) {
-    return true;
-  }
   if (input == null || typeof input !== 'object') return false;
   const candidate = input as { headers?: { get?: unknown }; body?: unknown };
   return (
     typeof candidate.headers === 'object' &&
     candidate.headers !== null &&
-    typeof (candidate.headers).get === 'function' &&
+    typeof candidate.headers.get === 'function' &&
     'body' in candidate
   );
 }
@@ -74,12 +71,19 @@ function looksLikeReadable(input: unknown): input is Readable {
   if (input == null || typeof input !== 'object') return false;
   const candidate = input as {
     pipe?: unknown;
+    unpipe?: unknown;
     on?: unknown;
-    readable?: unknown;
+    off?: unknown;
+    destroy?: unknown;
   };
+  // Every method the parser wiring and cleanup call must exist, or a
+  // lookalike would throw later from inside a timer or stream listener.
   return (
     typeof candidate.pipe === 'function' &&
-    typeof candidate.on === 'function'
+    typeof candidate.unpipe === 'function' &&
+    typeof candidate.on === 'function' &&
+    typeof candidate.off === 'function' &&
+    typeof candidate.destroy === 'function'
   );
 }
 
@@ -94,10 +98,7 @@ function looksLikeReadable(input: unknown): input is Readable {
  *
  * @internal
  */
-export function normalizeInput(
-  input: unknown,
-  opts: NormalizeOptions,
-): NormalizedInput {
+export function normalizeInput(input: unknown, opts: NormalizeOptions): NormalizedInput {
   if (looksLikeResponse(input)) {
     if (input.body == null) {
       throw new Error('multipart: response body is null');
@@ -118,14 +119,10 @@ export function normalizeInput(
 
   if (looksLikeReadable(input)) {
     if (typeof opts.boundary !== 'string' || opts.boundary === '') {
-      throw new Error(
-        'multipart: boundary option is required when input is a Readable',
-      );
+      throw new Error('multipart: boundary option is required when input is a Readable');
     }
     return { kind: 'readable', readable: input, boundary: opts.boundary };
   }
 
-  throw new Error(
-    'multipart: input must be a Response or a Node Readable',
-  );
+  throw new Error('multipart: input must be a Response or a Node Readable');
 }

@@ -79,6 +79,13 @@ export interface TimerState {
   resetIdle(): void;
 
   /**
+   * Cancel the idle timer for good. Called when the source has ended: no
+   * more chunks can arrive, so idleness no longer means a stalled source.
+   * `resetIdle()` stays a no-op afterwards.
+   */
+  stopIdle(): void;
+
+  /**
    * Cancel both timers and detach the caller-signal listener. Idempotent.
    * Called from the iterator's `finally` block — paired with the
    * `cleanup()` function via the `cleaned` flag in
@@ -111,17 +118,13 @@ export interface TimerState {
  *
  * @param opts - Idle/total timeouts (already validated by caller) and
  *   optional caller `AbortSignal`.
- * @param startMs - The wallclock start time of the operation. Reserved for
- *   computing `elapsedMs` in future error variants; the current error
- *   classes take only the configured cap, so this parameter is currently
- *   unused.
+ * @param startMs - The wallclock start time of the operation. The total
+ *   timer fires `totalTimeoutMs` after it, so time spent before this call
+ *   (e.g. waiting for response headers) counts against the budget.
  *
  * @internal
  */
-export function setupTimers(
-  opts: TimerStateOptions,
-  startMs: number,
-): TimerState {
+export function setupTimers(opts: TimerStateOptions, startMs: number): TimerState {
   const controller = new AbortController();
   const callerSignal = opts.signal;
 
@@ -159,23 +162,26 @@ export function setupTimers(
   function runCleanup(): void {
     if (cleaned) return;
     cleaned = true;
-    if (idleTimer !== undefined) {
-      clearTimeout(idleTimer);
-      idleTimer = undefined;
-    }
-    if (totalTimer !== undefined) {
-      clearTimeout(totalTimer);
-      totalTimer = undefined;
-    }
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
+    clearTimeout(totalTimer);
+    totalTimer = undefined;
     if (callerSignal !== undefined) {
       callerSignal.removeEventListener('abort', onCallerAbort);
     }
   }
 
+  let idleStopped = false;
   const resetIdle = (): void => {
-    if (cleaned || controller.signal.aborted) return;
-    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    if (cleaned || idleStopped || controller.signal.aborted) return;
+    clearTimeout(idleTimer);
     idleTimer = setTimeout(onIdle, opts.idleTimeoutMs);
+  };
+
+  const stopIdle = (): void => {
+    idleStopped = true;
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
   };
 
   // FR-009 already-aborted check: if the caller signal is aborted at call
@@ -195,17 +201,14 @@ export function setupTimers(
       callerSignal.addEventListener('abort', onCallerAbort, { once: true });
     }
     idleTimer = setTimeout(onIdle, opts.idleTimeoutMs);
-    totalTimer = setTimeout(onTotal, opts.totalTimeoutMs);
+    const remainingMs = opts.totalTimeoutMs - (Date.now() - startMs);
+    totalTimer = setTimeout(onTotal, Math.max(0, remainingMs));
   }
-
-  // The `startMs` parameter is currently unused by the error classes
-  // (the error fields don't embed `elapsedMs`) but threaded through for
-  // forward-compat with NFR-DR-S-006's potential expansion.
-  void startMs;
 
   return {
     signal: controller.signal,
     resetIdle,
+    stopIdle,
     cleanup: runCleanup,
     abortError: () => storedError,
   };

@@ -627,37 +627,16 @@ export function flattenHeaderValue(v: unknown): string;
 export function flattenDicerHeaders(h: DicerHeadersRaw): Record<string, string>;
 ```
 
-### 2.8 `sanitizeFileName` (per FR-023, NFR-DR-S-005)
+### 2.8 `sanitizeFileName` (withdrawn)
 
-```ts
-/**
- * Cross-platform-safe filename normalizer. Internal — never exported.
- * Pipeline: strip path separators (`/`, `\`), strip control chars
- * (0x00–0x1F and 0x7F), strip leading dots, replace anything not in
- * `[A-Za-z0-9._-]` with `_`, cap at 255 chars.
- *
- * Per NFR-DR-S-005, `sanitizeFileName` MUST always return a non-empty
- * string. The fallback `'_'` (single underscore) is returned when ANY
- * of these hold:
- *   - The pipeline above produces an empty string (e.g. input was `'...'`
- *     and leading-dot strip emptied it).
- *   - The result, case-insensitively, matches a Windows reserved device
- *     name with or without an extension: `CON`, `PRN`, `AUX`, `NUL`,
- *     `COM1..COM9`, `LPT1..LPT9` (e.g. `'aux.txt'` → `'_'`).
- *   - The result is the literal `'.'` or `'..'` (pure-dot result).
- *
- * Implementation note: the Windows-reserved check is applied AFTER the
- * leading-dot strip and char-class replace, BEFORE the 255-char cap.
- */
-export function sanitizeFileName(name: string): string;
-```
+Withdrawn in 2.0.0: the helper was never called by the library or exported, so it was removed. FR-023 and NFR-DR-S-005 are withdrawn with it.
 
 ### 2.9 `deriveNameFromContentId` (kept internal)
 
 ```ts
 /**
  * Internal-only. Extracts a filename hint from a `Content-ID` header,
- * passing the result through `sanitizeFileName`. No DICOM-specific
+ * No DICOM-specific
  * `.dcm` defaulting (that was domain-specific in the reference impl).
  *
  * Returns `undefined` if the input is undefined OR the sanitized result
@@ -808,7 +787,6 @@ Every spec-mentioned data item is accounted for. This is the table the planner c
 | Ambient `dicer` declarations         | `src/internal/dicer.d.ts`                                | NO      | FR-DR-A-027 — hand-written shim                    |
 | `flattenDicerHeaders`                | `src/internal/flatten-headers.ts`                        | NO      | FR-016 — internal only                             |
 | `flattenHeaderValue`                 | `src/internal/flatten-headers.ts`                        | NO      | FR-016                                             |
-| `sanitizeFileName`                   | `src/internal/sanitize-filename.ts`                      | NO      | FR-016, FR-023, NFR-DR-S-005                       |
 | `deriveNameFromContentId`            | `src/internal/derive-name.ts`                            | NO      | FR-016 (unused after rename — see §2.9 note)       |
 | `formatErrorEmbed`                   | `src/internal/format-error-embed.ts`                     | NO      | NFR-DR-S-006 — sanitize embedded attacker bytes    |
 | `QueueNotifier`, `QueueItem`, `END`  | `src/internal/queue-notifier.ts`                         | NO      | replaces inline closures in reference              |
@@ -837,5 +815,4 @@ Every spec-mentioned data item is accounted for. This is the table the planner c
 | `streamToString` / `streamToBuffer` `maxBytes` | undefined (no cap)                      | when set, source destroyed and promise rejects on overflow (NFR-DR-S-002)                                |
 | `StreamingMultipartPart.headers`             | always lowercase keys                     | mirrors Node `http`                                                                                      |
 | `StreamingMultipartPart.contentType`         | `''` if absent                            | never `undefined`                                                                                        |
-| `sanitizeFileName` empty / Windows-reserved / dot-only result | mapped to `'_'`          | NFR-DR-S-005 — never returns empty                                                                       |
 | `END` sentinel                               | n/a                                       | unique `Symbol`; identity comparison only                                                                |

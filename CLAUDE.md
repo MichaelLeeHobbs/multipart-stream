@@ -55,7 +55,7 @@ pnpm coverage
 pnpm lint
 pnpm typecheck
 pnpm check           # lint + typecheck + test
-pnpm pack --dry-run  # verify publish surface
+npm pack --dry-run   # verify publish surface (pnpm@10.0.0 pack has no --dry-run)
 ```
 
 ## Public API surface (per BRIEF.md, finalized in kiln/spec/api.md)
@@ -63,7 +63,7 @@ pnpm pack --dry-run  # verify publish surface
 - `parseMultipartRelated(res, opts)` — async-generator over parts; cleanup-safe
 - `fetchAndHandleMultipart(url, options)` — `fetch` wrapper with idle/total timeout, AbortSignal, progress
 - `streamToString(readable, encoding?)` — collect a small text part
-- Utility helpers: `extractBoundary`, `flattenPartHeaders`, `flattenHeaderValue`, `sanitizeFileName`, `deriveNameFromContentId` (some may stay internal — spec decides)
+- Utility helpers: `extractBoundary`, `flattenPartHeaders`, `flattenHeaderValue`, `deriveNameFromContentId` (some may stay internal — spec decides)
 - Types: `StreamingMultipartPart`, `PartParser<T>`, `ParseMultipartOptions`, `MultipartFetchResult<T>`, `MultipartHandlerOptions<T>`
 
 ## What this project is NOT

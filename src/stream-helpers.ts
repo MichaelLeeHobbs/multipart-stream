@@ -19,7 +19,7 @@
  * `parseMultipartRelated`.
  */
 
-import type { Readable } from 'node:stream';
+import { finished, type Readable } from 'node:stream';
 
 /**
  * Options bag accepted by both {@link streamToString} and
@@ -68,45 +68,14 @@ export function streamToString(
   encoding: BufferEncoding = 'utf8',
   options: StreamCollectOptions = {},
 ): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    const cap = options.maxBytes;
-    const onData = (chunk: Buffer | string): void => {
-      const buf =
-        typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk;
-      total += buf.length;
-      // NFR-DR-S-002 cap check. We compare AFTER accumulating the current
-      // chunk's bytes — a cap of N rejects on the chunk that takes the
-      // total over N (i.e. strict `>`). The source is destroyed before
-      // we reject so any further 'data' events are suppressed.
-      if (cap !== undefined && total > cap) {
-        cleanup();
-        readable.destroy();
-        reject(
-          new Error(`streamToString: input exceeded maxBytes (${String(cap)})`),
-        );
-        return;
+  return Promise.resolve()
+    .then(() => {
+      if (!Buffer.isEncoding(encoding)) {
+        throw new TypeError(`streamToString: unknown encoding ${JSON.stringify(String(encoding))}`);
       }
-      chunks.push(buf);
-    };
-    const onError = (err: Error): void => {
-      cleanup();
-      reject(err);
-    };
-    const onEnd = (): void => {
-      cleanup();
-      resolve(Buffer.concat(chunks).toString(encoding));
-    };
-    const cleanup = (): void => {
-      readable.off('data', onData);
-      readable.off('error', onError);
-      readable.off('end', onEnd);
-    };
-    readable.on('data', onData);
-    readable.once('error', onError);
-    readable.once('end', onEnd);
-  });
+      return collect(readable, options, 'streamToString', encoding);
+    })
+    .then((buf) => buf.toString(encoding));
 }
 
 /**
@@ -135,38 +104,66 @@ export function streamToBuffer(
   readable: Readable,
   options: StreamCollectOptions = {},
 ): Promise<Buffer> {
+  return Promise.resolve().then(() => collect(readable, options, 'streamToBuffer', 'utf8'));
+}
+
+/**
+ * Shared drain loop. Settles exactly once: on `'end'`, on `'error'`, on a
+ * destroy without either (premature close), or when a chunk cannot be
+ * converted to bytes or breaks the cap — the last two destroy the source.
+ */
+function collect(
+  readable: Readable,
+  options: StreamCollectOptions,
+  label: string,
+  stringEncoding: BufferEncoding,
+): Promise<Buffer> {
+  const cap = options.maxBytes;
+  if (cap !== undefined && (!Number.isSafeInteger(cap) || cap < 1)) {
+    throw new TypeError(`${label}: maxBytes must be a positive safe integer when set`);
+  }
   return new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
-    const cap = options.maxBytes;
-    const onData = (chunk: Buffer | string): void => {
-      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    let settled = false;
+    const settle = (err: Error | null): void => {
+      if (settled) return;
+      settled = true;
+      readable.off('data', onData);
+      stopWatching();
+      if (err !== null) reject(err);
+      else resolve(Buffer.concat(chunks));
+    };
+    const abandon = (err: Error): void => {
+      settle(err);
+      readable.destroy();
+    };
+    const onData = (chunk: unknown): void => {
+      let buf: Buffer;
+      try {
+        buf = Buffer.isBuffer(chunk)
+          ? chunk
+          : typeof chunk === 'string'
+            ? Buffer.from(chunk, stringEncoding)
+            : Buffer.from(chunk as Uint8Array);
+      } catch {
+        abandon(new TypeError(`${label}: stream emitted a non-byte chunk`));
+        return;
+      }
       total += buf.length;
+      // NFR-DR-S-002 cap check, AFTER accumulating the current chunk: a cap
+      // of N rejects on the chunk that takes the total over N (strict `>`).
       if (cap !== undefined && total > cap) {
-        cleanup();
-        readable.destroy();
-        reject(
-          new Error(`streamToBuffer: input exceeded maxBytes (${String(cap)})`),
-        );
+        abandon(new Error(`${label}: input exceeded maxBytes (${String(cap)})`));
         return;
       }
       chunks.push(buf);
     };
-    const onError = (err: Error): void => {
-      cleanup();
-      reject(err);
-    };
-    const onEnd = (): void => {
-      cleanup();
-      resolve(chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks));
-    };
-    const cleanup = (): void => {
-      readable.off('data', onData);
-      readable.off('error', onError);
-      readable.off('end', onEnd);
-    };
+    // `finished` also reports a destroy without 'end' as a premature-close
+    // error, so a body torn down mid-read rejects instead of hanging.
+    const stopWatching = finished(readable, (err) => {
+      settle(err ?? null);
+    });
     readable.on('data', onData);
-    readable.once('error', onError);
-    readable.once('end', onEnd);
   });
 }
