@@ -1,7 +1,7 @@
 /**
  * `@ubercode/multipart-stream` — public entry.
  *
- * The ONLY file callers import from. Per `kiln/spec/api.md` "Module entry" + the
+ * The ONLY file callers import from. Per `docs/spec/api.md` "Module entry" + the
  * "Submodule exports policy: none" — there is no `@ubercode/multipart-stream/utils`
  * or similar; one entry point, one contract.
  */

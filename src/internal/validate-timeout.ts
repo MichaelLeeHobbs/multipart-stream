@@ -1,7 +1,7 @@
 /**
  * `validatePositiveTimeout` — centralized timeout validation for both public
  * entry points (`parseMultipartRelated` and `fetchAndHandleMultipart`) per
- * `kiln/spec/data-model.md` §2.11.
+ * `docs/spec/data-model.md` §2.11.
  *
  * Per FR-006 / JC-3 / NFR-DR-S-009, both `idleTimeoutMs` and `totalTimeoutMs`
  * are REQUIRED on every entry point and MUST be positive finite integers in

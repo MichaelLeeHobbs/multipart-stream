@@ -5,7 +5,7 @@
  * http parser trims both ends), so `contentType` / `contentId` / `headers`
  * carry stray whitespace and the documented checks
  * (`part.contentType.startsWith('application/json')` in the README,
- * `part.contentType === 'application/json'` in kiln/spec/api.md) fail.
+ * `part.contentType === 'application/json'` in docs/spec/api.md) fail.
  * `contentLength` alone is `.trim()`med, which shows the intent.
  */
 import { Readable } from 'node:stream';

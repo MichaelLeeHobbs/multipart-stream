@@ -8,6 +8,5 @@ coverage/
 .env.local
 .claude/settings.local.json
 .claude/logs/
-.kiln/
 .idea/
 .vscode/

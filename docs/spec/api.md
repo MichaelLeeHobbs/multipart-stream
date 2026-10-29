@@ -135,7 +135,7 @@ export function fetchAndHandleMultipart<T>(
 
 ### Description
 
-Wraps `fetch` end-to-end: idle + total timeout, abort propagation, progress reporting, content-type validation, multipart parsing, per-part `parser` invocation, and resource cleanup. Resolves with `MultipartFetchResult<T>` on success; rejects on any failure (including parser throws and validation failures). NEVER swallows errors into the result struct (a deliberate departure from the reference impl, per `kiln/standards/error-handling.md`).
+Wraps `fetch` end-to-end: idle + total timeout, abort propagation, progress reporting, content-type validation, multipart parsing, per-part `parser` invocation, and resource cleanup. Resolves with `MultipartFetchResult<T>` on success; rejects on any failure (including parser throws and validation failures). NEVER swallows errors into the result struct (a deliberate departure from the reference impl, per `docs/standards/error-handling.md`).
 
 ### Parameters
 
@@ -675,7 +675,7 @@ Single-format consumers (pure ESM or pure CJS) can rely on `instanceof` exclusiv
 
 ### Soft-fail per part (continue-on-error)
 
-By design, `fetchAndHandleMultipart` is **fail-fast**: if the parser throws on any part, the whole operation rejects and the source is destroyed (per `kiln/standards/error-handling.md` "no silent error collection"). This matches what a battle-tested library should do by default.
+By design, `fetchAndHandleMultipart` is **fail-fast**: if the parser throws on any part, the whole operation rejects and the source is destroyed (per `docs/standards/error-handling.md` "no silent error collection"). This matches what a battle-tested library should do by default.
 
 If you need soft-fail semantics — collect successes AND parser errors, return both at the end — wrap your parser with a `try/catch` and return a discriminated value:
 

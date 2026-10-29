@@ -11,7 +11,7 @@
  * the promise rejects with a clear `Error`. Existing callers that pass only
  * `(readable)` or `(readable, encoding)` see no behavior change.
  *
- * Per kiln/spec/api.md §3 + §4, `streamToBuffer`'s `options` parameter is the
+ * Per docs/spec/api.md §3 + §4, `streamToBuffer`'s `options` parameter is the
  * second positional arg; `streamToString`'s `options` parameter is the
  * THIRD positional arg (after the legacy `encoding?`). The cap-overflow
  * error is a generic `Error` (NOT a custom class) because these are

@@ -6,7 +6,7 @@ import {
   MultipartTooManyPartsError,
 } from '../../src/index.js';
 
-describe('error messages (kiln/spec/api.md)', () => {
+describe('error messages (docs/spec/api.md)', () => {
   it('formats MultipartPartTooLargeError', () => {
     const err = new MultipartPartTooLargeError({
       maxPartBytes: 10,

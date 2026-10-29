@@ -8,13 +8,10 @@ A focused TypeScript library for consuming `multipart/related` HTTP responses as
 multipart-stream/
 ├── CLAUDE.md           # this file (AI-facing)
 ├── README.md           # operator-facing (install, quickstart, API)
-├── BRIEF.md            # operator-staged project intent
-├── kiln/spec/               # data-model, api, ui (n/a), architecture, design, test-plan
-├── kiln/standards/          # architecture, coding, error-handling, api-conventions, testing
-├── kiln/sprints/            # plan.json + sprint-N-report.json + sprint-N-qa.json
+├── docs/spec/          # spec, data-model, api, architecture, test-plan, design reviews
+├── docs/standards/     # architecture, coding, error-handling, api-conventions, testing
 ├── src/                # parseMultipartRelated, fetchAndHandleMultipart, types, utils, index
 ├── tests/              # vitest unit + integration
-├── kiln/prompts/            # planner / generator / evaluator / spec-agent contracts
 ├── tsconfig.{base,build,}.json   # strict TS, Node 20+
 ├── tsup.config.ts      # dual ESM/CJS + .d.ts
 ├── vitest.config.ts
@@ -35,13 +32,13 @@ multipart-stream/
 
 ## Conventions
 
-Read the full conventions in `kiln/standards/` — every file there is mandatory.
+Read the full conventions in `docs/standards/` — every file there is mandatory.
 
-- `kiln/standards/architecture.md` — layering for a small library (parser / fetch-orchestration / utility)
-- `kiln/standards/error-handling.md` — silent catch banned; replace with observable patterns
-- `kiln/standards/api-conventions.md` — naming, return shapes, options-object pattern
-- `kiln/standards/coding.md` — TS strict, naming, imports
-- `kiln/standards/testing.md` — unit + integration split
+- `docs/standards/architecture.md` — layering for a small library (parser / fetch-orchestration / utility)
+- `docs/standards/error-handling.md` — silent catch banned; replace with observable patterns
+- `docs/standards/api-conventions.md` — naming, return shapes, options-object pattern
+- `docs/standards/coding.md` — TS strict, naming, imports
+- `docs/standards/testing.md` — unit + integration split
 
 ## Commands
 
@@ -58,7 +55,7 @@ pnpm check           # lint + typecheck + test
 npm pack --dry-run   # verify publish surface (pnpm@10.0.0 pack has no --dry-run)
 ```
 
-## Public API surface (per BRIEF.md, finalized in kiln/spec/api.md)
+## Public API surface (finalized in docs/spec/api.md)
 
 - `parseMultipartRelated(res, opts)` — async-generator over parts; cleanup-safe
 - `fetchAndHandleMultipart(url, options)` — `fetch` wrapper with idle/total timeout, AbortSignal, progress
@@ -75,4 +72,4 @@ npm pack --dry-run   # verify publish surface (pnpm@10.0.0 pack has no --dry-run
 - Not a UI library — no React components, no progress bars
 - Not a retry-on-network-error library — caller wraps with their own retry
 
-See `BRIEF.md` for the extraction context (reference impl at `vns/portal/portal-ecia/src/libs/streamingMultipart.ts`) and `kiln/spec/spec.md` (after Phase 4) for the full scope.
+The library was extracted from a reference implementation at `vns/portal/portal-ecia/src/libs/streamingMultipart.ts`. See `docs/spec/spec.md` for the full scope.

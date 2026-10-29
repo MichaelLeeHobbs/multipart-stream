@@ -39,7 +39,7 @@ function buildEnvelope(partCount: number): Buffer {
 
 /**
  * Common listener-count + destroy assertions used across every termination
- * path. Per `kiln/spec/test-plan.md` §"Resource-Leak Hygiene Suite":
+ * path. Per `docs/spec/test-plan.md` §"Resource-Leak Hygiene Suite":
  *   - parser.listenerCount('part') === 0
  *   - parser.listenerCount('finish') === 0
  *   - parser.listenerCount('error') >= 1   (FR-011 retention)

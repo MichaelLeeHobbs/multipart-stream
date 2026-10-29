@@ -2,7 +2,7 @@
  * Integration test for T-078 — Logger meta sanitization gate
  * (NFR-DR-S-008 / F-S-007).
  *
- * Per kiln/spec/test-plan.md row T-078:
+ * Per docs/spec/test-plan.md row T-078:
  *   "trigger T-016 path with a parser error whose `.message` is 500 chars +
  *   control bytes; assert mockLogger event arg's `meta.errSummary.message.length
  *   <= 120` and contains no \x00-\x1F bytes; assert meta does NOT contain a

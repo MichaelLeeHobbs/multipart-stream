@@ -1,5 +1,5 @@
 /**
- * In-process HTTP server fixture, per `kiln/spec/test-plan.md` "Conventions" →
+ * In-process HTTP server fixture, per `docs/spec/test-plan.md` "Conventions" →
  * "HTTP fixture". Used by the fetch-orchestration integration tests.
  *
  * Listens on a dynamic port (so tests can run in parallel without

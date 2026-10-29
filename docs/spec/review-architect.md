@@ -8,7 +8,7 @@
 
 **Severity:** Critical
 **Type:** Wrong shape (data-flow ownership error)
-**Location:** `kiln/spec/architecture.md` §3 line 68 ("Constructs onProgress wrapper that doubles as idle-reset"); §4.2 line 156 ("onProgress: progressWrapper, (resets idle timer too)"); FR-013 in `kiln/spec/spec.md`; FR-007.
+**Location:** `docs/spec/architecture.md` §3 line 68 ("Constructs onProgress wrapper that doubles as idle-reset"); §4.2 line 156 ("onProgress: progressWrapper, (resets idle timer too)"); FR-013 in `docs/spec/spec.md`; FR-007.
 
 **Problem:** Architecture §3 and §4.2 say Layer B (`fetchAndHandleMultipart`) drives the idle reset by wrapping `onProgress`, but FR-013 explicitly defines the contract: `onProgress` fires "at least once per yielded part and at completion." That cadence is per-part, not per-chunk. FR-007 demands the idle timer reset on **every chunk** received from the source. A single multipart part can be megabytes streaming over many chunks across many seconds; if `onProgress` only ticks at part boundaries, a stream that's sending a large part body slowly but steadily will idle-timeout in the middle of a part it's actively delivering. The idle reset has to ride a real chunk-level event on the source `Readable` (`'data'` event), and that event lives in Layer A — but Layer A is being asked to expose only `onProgress`, which is the wrong granularity.
 
@@ -16,8 +16,8 @@ The deeper layering error: Layer B owns `TimerState` and Layer A owns the source
 
 **Recommendation:** Move idle-timer ownership entirely into Layer A. `parseMultipartRelated` already attaches the per-chunk `'data'` listener (architecture.md §4.1 step 6), so it is the natural home for `resetIdle()`. Pass `idleTimeoutMs` and `totalTimeoutMs` from Layer B → Layer A on every call (architecture.md §4.2 step 5 currently passes `idleTimeoutMs: undefined`, which is the bug). Drop the "onProgress doubles as idle reset" trick. Concretely:
 
-- Edit `kiln/spec/architecture.md` §3 layer-B box: replace "Constructs onProgress wrapper that doubles as idle-reset" with "Forwards `idleTimeoutMs`/`totalTimeoutMs`/`signal` to `parseMultipartRelated`; owns wallclock for `elapsedMs`/`bytes`."
-- Edit `kiln/spec/architecture.md` §4.2 step 5: pass `idleTimeoutMs: opts.idleTimeoutMs, totalTimeoutMs: opts.totalTimeoutMs, signal: opts.signal` through to `parseMultipartRelated`.
+- Edit `docs/spec/architecture.md` §3 layer-B box: replace "Constructs onProgress wrapper that doubles as idle-reset" with "Forwards `idleTimeoutMs`/`totalTimeoutMs`/`signal` to `parseMultipartRelated`; owns wallclock for `elapsedMs`/`bytes`."
+- Edit `docs/spec/architecture.md` §4.2 step 5: pass `idleTimeoutMs: opts.idleTimeoutMs, totalTimeoutMs: opts.totalTimeoutMs, signal: opts.signal` through to `parseMultipartRelated`.
 - Add `FR-DR-A-025 The idle timer MUST be reset by the per-chunk 'data' listener attached at Layer A, not by the onProgress callback. onProgress's cadence (FR-013) is unchanged.`
 - Add `FR-DR-A-026 fetchAndHandleMultipart MUST forward idleTimeoutMs and totalTimeoutMs to parseMultipartRelated (not consume them at the fetch layer). Timer ownership lives in one place (Layer A) for both entry points.`
 
@@ -29,7 +29,7 @@ The deeper layering error: Layer B owns `TimerState` and Layer A owns the source
 
 **Severity:** High
 **Type:** Missing FR (build-system gap, library-specific)
-**Location:** `kiln/spec/architecture.md` §6 (Build / publish architecture); NFR-001, NFR-004; `BRIEF.md` line 74.
+**Location:** `docs/spec/architecture.md` §6 (Build / publish architecture); NFR-001, NFR-004; `BRIEF.md` line 74.
 
 **Problem:** `dicer@0.3.1` is the single runtime dep, pinned exact, and the architecture is built around `new Dicer({ boundary })`, attaching listeners on `dicer`, `dicer.unpipe(...)`, etc. dicer itself is a 2014-era CJS package that ships no `.d.ts` and no `types` field in its `package.json`. There is a community `@types/dicer` on DefinitelyTyped, last updated years ago and not necessarily aligned with `0.3.1`'s actual emit shape (`Buffer | Buffer[] | Buffer[][]` for header values — see data-model §2.5). The spec mandates `strict: true` + `noUncheckedIndexedAccess: true` + "no `any`" (NFR-001), but says nothing about how dicer is imported under those rules.
 
@@ -43,7 +43,7 @@ Three concrete consequences if this is left unspecified:
 
 - Add `FR-DR-A-027 The library MUST ship a hand-written ambient declaration shim for dicer at src/types/dicer.d.ts that types only the surface the library uses (Dicer constructor, 'part'/'finish'/'error'/'header' events, per-part Readable shape). The shim MUST NOT depend on @types/dicer. tsup's --dts MUST emit a self-contained dist/index.d.ts that does not require @types/dicer at consumer install time.`
 - Add to NFR-001: "no `any` includes implicit `any` from untyped imports."
-- Update `kiln/spec/architecture.md` §6: add a row "dicer types" → "ambient shim at `src/types/dicer.d.ts`; @types/dicer NOT a devDependency."
+- Update `docs/spec/architecture.md` §6: add a row "dicer types" → "ambient shim at `src/types/dicer.d.ts`; @types/dicer NOT a devDependency."
 
 **Action rule:** 1 (Critical missing feature → add to spec).
 
@@ -53,7 +53,7 @@ Three concrete consequences if this is left unspecified:
 
 **Severity:** High
 **Type:** Spec gap (library-specific: CJS/ESM interop)
-**Location:** `kiln/spec/architecture.md` §6; NFR-002; no FR addresses it.
+**Location:** `docs/spec/architecture.md` §6; NFR-002; no FR addresses it.
 
 **Problem:** dicer is published as CJS with a `module.exports = Dicer` default-export shape (no named exports). The library publishes both ESM (`dist/index.js`) and CJS (`dist/index.cjs`) with `tsup`. tsup will, by default, externalize a runtime dependency. That means:
 
@@ -66,7 +66,7 @@ Worse: if a consumer uses a non-Node ESM environment (e.g., a Vite SSR build, a 
 
 - Add `FR-DR-A-028 The dicer import MUST be written defensively to handle both __esModule-wrapped and bare CJS interop: import the module via a single helper that normalizes the default export. Example: import dicerMod from 'dicer'; const Dicer = (dicerMod as any)?.default ?? dicerMod; — except without the any. The library MUST verify in CI that both dist/index.js and dist/index.cjs construct a working Dicer when consumed.`
 - Strengthen test T-052 to actually instantiate the library from a child Node process running in `--input-type=module` (ESM) AND in CJS, parse a real envelope end-to-end, and assert success — not just "stringification matches expected." A surface-level instanceof check from a single bundle (current T-052) does not exercise the dicer interop path.
-- Add to `kiln/spec/architecture.md` §6: row "dicer import shape" → "via a normalized default-export helper; verified by E2E child-process tests in both ESM and CJS modes."
+- Add to `docs/spec/architecture.md` §6: row "dicer import shape" → "via a normalized default-export helper; verified by E2E child-process tests in both ESM and CJS modes."
 
 **Action rule:** 1 (Critical missing feature → add to spec). This is exactly the class of bug that ships and bites the first external consumer.
 
@@ -76,7 +76,7 @@ Worse: if a consumer uses a non-Node ESM environment (e.g., a Vite SSR build, a 
 
 **Severity:** Medium
 **Type:** Leaky abstraction
-**Location:** `kiln/spec/data-model.md` §1.3 (`MultipartFetchResult`); `kiln/spec/api.md` §2.
+**Location:** `docs/spec/data-model.md` §1.3 (`MultipartFetchResult`); `docs/spec/api.md` §2.
 
 **Problem:** `MultipartFetchResult<T>.response: Response` returns the original `fetch` `Response` object after the multipart envelope has been fully consumed. The data-model JSDoc admits this in plain English ("Headers and status are preserved; the body stream is already consumed"). But `Response` does not have a way to be "headers/status only" — the type is the whole thing. A caller will reasonably write:
 
@@ -91,7 +91,7 @@ This is a foot-gun the type system cannot warn about. The architecture is leakin
 
 Option (a) is cleaner architecturally. Option (b) is preserved-by-convention. Recommendation: option (a).
 
-- Replace `MultipartFetchResult.response: Response` with `status: number` and `headers: Headers`. Update `kiln/spec/data-model.md` §1.3 and `kiln/spec/api.md` §2.
+- Replace `MultipartFetchResult.response: Response` with `status: number` and `headers: Headers`. Update `docs/spec/data-model.md` §1.3 and `docs/spec/api.md` §2.
 - If option (b) is preferred (operator's call), add `FR-DR-A-029 MultipartFetchResult.response MUST be documented as headers/status-inspection-only; calling response.text/json/arrayBuffer is undefined behavior.` and surface the warning in the API doc, not just the type's JSDoc.
 
 **Action rule:** 5 (Genuine judgment call → ask operator). The choice between (a) clean break vs (b) preserve `response` parity is a deliberate API trade-off.
@@ -102,7 +102,7 @@ Option (a) is cleaner architecturally. Option (b) is preserved-by-convention. Re
 
 **Severity:** Medium
 **Type:** Spec gap (battle-tested concern)
-**Location:** `kiln/spec/spec.md` (no FR); `kiln/spec/data-model.md` §2.2 (`QueueNotifier`); `kiln/spec/architecture.md` §4.
+**Location:** `docs/spec/spec.md` (no FR); `docs/spec/data-model.md` §2.2 (`QueueNotifier`); `docs/spec/architecture.md` §4.
 
 **Problem:** The library claims battle-tested NFR-006 (resource-leak hygiene under concurrent abort + dicer-error race conditions), and the queue-notifier (`QueueNotifier.next()` returns `Promise<QueueItem>`) is the heart of the data flow. But nothing in the spec addresses what happens when:
 
@@ -128,7 +128,7 @@ For a library that explicitly markets "battle-tested" this is a real gap. The re
 
 **Severity:** Medium
 **Type:** Smell (library-specific: runtime contract)
-**Location:** `kiln/spec/spec.md` NFR-003; `kiln/spec/architecture.md` §6 ("engines: node >=20"); `kiln/spec/spec.md` Assumptions line 150.
+**Location:** `docs/spec/spec.md` NFR-003; `docs/spec/architecture.md` §6 ("engines: node >=20"); `docs/spec/spec.md` Assumptions line 150.
 
 **Problem:** The library leans hard on `Readable.fromWeb(res.body as ReadableStream<Uint8Array>)` (architecture.md §5.5; FR-003). `Readable.fromWeb` was introduced as experimental in Node 17, stabilized in 20, but had backpressure-handling fixes in 20.6, 20.10, and 22.x. NFR-003 says ">=20" with no minor pin. The CI matrix is not specified anywhere — test-plan.md says "Tests run on Node 20+" (Assumptions). For a library that publishes to npm and claims "battle-tested," this is too loose:
 
@@ -150,9 +150,9 @@ For a library that explicitly markets "battle-tested" this is a real gap. The re
 
 **Severity:** Low
 **Type:** Smell (configuration/observability ergonomics)
-**Location:** `kiln/spec/data-model.md` §1.7; `kiln/spec/api.md` "Wiring a structured logger"; FR-018.
+**Location:** `docs/spec/data-model.md` §1.7; `docs/spec/api.md` "Wiring a structured logger"; FR-018.
 
-**Problem:** The chosen `Logger.warn(msg: string, meta?: unknown)` signature matches `console.warn` but inverts the dominant structured-logger convention (`pino`, `bunyan`: `logger.warn(meta, msg)`; `winston`: `logger.warn(msg, meta)` — only winston actually matches). The result: every pino/bunyan caller writes the `{ warn: (msg, meta) => log.warn(meta, msg) }` adapter. The recipe in `kiln/spec/api.md` even shows this. This isn't fatal, but it's a tax.
+**Problem:** The chosen `Logger.warn(msg: string, meta?: unknown)` signature matches `console.warn` but inverts the dominant structured-logger convention (`pino`, `bunyan`: `logger.warn(meta, msg)`; `winston`: `logger.warn(msg, meta)` — only winston actually matches). The result: every pino/bunyan caller writes the `{ warn: (msg, meta) => log.warn(meta, msg) }` adapter. The recipe in `docs/spec/api.md` even shows this. This isn't fatal, but it's a tax.
 
 A more host-friendly contract would be a level-tagged function:
 
@@ -171,7 +171,7 @@ Either is more host-pluggable than the current shape because hosts typically hav
 
 **Recommendation:** This is a judgment call; the current signature is workable, just lightly suboptimal. If the operator is set on `{ warn(msg, meta?) }` keep it and explicitly note the tradeoff. Otherwise, switch to a `LogFn` shape and write the adapter recipe for both pino and console.
 
-- Either: keep current signature; add design-decision note in `kiln/spec/architecture.md` §5.10 acknowledging the asymmetry with pino/bunyan.
+- Either: keep current signature; add design-decision note in `docs/spec/architecture.md` §5.10 acknowledging the asymmetry with pino/bunyan.
 - Or: change `Logger` to `(level, msg, meta) => void` and update the three call sites (late-emit error, unpipe-failed, onProgress-threw).
 
 **Action rule:** 5 (Genuine judgment call → ask operator).
@@ -182,7 +182,7 @@ Either is more host-pluggable than the current shape because hosts typically hav
 
 **Severity:** Medium
 **Type:** Type safety gap
-**Location:** `kiln/spec/data-model.md` §1 note + §1.4 (`ParseMultipartOptions`) + §1.5 (`MultipartHandlerOptions`).
+**Location:** `docs/spec/data-model.md` §1 note + §1.4 (`ParseMultipartOptions`) + §1.5 (`MultipartHandlerOptions`).
 
 **Problem:** The data-model document opens with a thoughtful note acknowledging that `exactOptionalPropertyTypes` forces a choice between `field?: T` (cannot pass `undefined` explicitly) and `field?: T | undefined` (can). The note says "Each field's comment makes the choice explicit" — but in practice the public option types are inconsistent without comments justifying the choice:
 
@@ -196,7 +196,7 @@ Callers spread-merging options (`{ ...defaults, signal: maybeSignal }` where `ma
 
 **Recommendation:** Adopt one rule for the public option types: every optional **input** field on `ParseMultipartOptions` and `MultipartHandlerOptions` is `field?: T | undefined`. Read-only **output** fields on `StreamingMultipartPart` are `field?: T | undefined` too (as currently typed). Internal-only types stay simple.
 
-- Edit `kiln/spec/data-model.md` §1.4 and §1.5: change every optional input field to `field?: T | undefined`.
+- Edit `docs/spec/data-model.md` §1.4 and §1.5: change every optional input field to `field?: T | undefined`.
 - Add to the §1 leading note: "Public option-bag inputs always use `field?: T | undefined` to support spread-merge ergonomics; internal types use the simpler `field?: T` form."
 
 **Action rule:** 1 (concrete bug-class fix → add to spec / change types).
