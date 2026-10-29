@@ -147,12 +147,15 @@ describe('MultipartParser: header parsing', () => {
     });
   });
 
-  it('strips exactly one leading space or tab and keeps inner whitespace', async () => {
-    const result = await parse([envelopeWith('X-A:a b\r\nX-B:  c\r\nX-C:\td e')]);
+  it('trims surrounding spaces and tabs and keeps inner whitespace', async () => {
+    const result = await parse([
+      envelopeWith('X-A:a b\r\nX-B:  c \t\r\nX-C:\td e\r\nX-D: f\r\n \tg  '),
+    ]);
     expect({ ...result.parts[0]?.headers }).toEqual({
       'x-a': ['a b'],
-      'x-b': [' c'],
+      'x-b': ['c'],
       'x-c': ['d e'],
+      'x-d': ['f \tg'],
     });
   });
 

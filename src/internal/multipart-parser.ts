@@ -87,7 +87,8 @@ function parseHeaders(block: Buffer, maxPairs: number): PartHeaders {
       if (previousValues === undefined) {
         throw new Error('Unexpected folded header value');
       }
-      previousValues[previousValues.length - 1] += line;
+      const last = previousValues.length - 1;
+      previousValues[last] = `${previousValues[last] ?? ''}${line}`.replace(/[ \t]+$/, '');
       continue;
     }
 
@@ -97,7 +98,11 @@ function parseHeaders(block: Buffer, maxPairs: number): PartHeaders {
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) {
       throw new Error('Malformed part header');
     }
-    const value = line.slice(colon + 1).replace(/^[ \t]/, '');
+    // Whitespace around a field value is not part of it (RFC 5322 / 9110).
+    const value = line
+      .slice(colon + 1)
+      .replace(/^[ \t]+/, '')
+      .replace(/[ \t]+$/, '');
     if (/[\x00-\x08\x0a-\x1f\x7f]/.test(value)) {
       throw new Error('Malformed part header');
     }
@@ -122,6 +127,9 @@ export class MultipartParser extends Writable {
   private headerBytes = Buffer.alloc(0);
   private suffix = Buffer.alloc(0);
   private candidate = false;
+  // The pending candidate ended a body-less part's header block, so the
+  // needle's leading CRLF is that block's blank line, not body data.
+  private headerEndInNeedle = false;
   private pausedPart: MultipartPartStream | undefined;
   private pendingWrite: (() => void) | undefined;
   private openParts = 0;
@@ -150,7 +158,20 @@ export class MultipartParser extends Writable {
       }
       if (this.state === 'done') return;
       if (matched) {
-        if (this.state === 'headers') throw new Error('Malformed part header');
+        // A still-pending suffix (`-`, `--`, LWSP) is settled by the CRLF
+        // that starts this match. As a delimiter, the needle is consumed as
+        // the bytes that follow it; as body data, both matches are body.
+        if (this.candidate) {
+          const settled = classifyDelimiter(Buffer.concat([this.suffix, INITIAL_CRLF]), false);
+          if (settled.kind !== 'data') {
+            this.consume(this.needle);
+            return;
+          }
+          this.flushNonDelimiter(this.suffix);
+          this.suffix = Buffer.alloc(0);
+          this.headerEndInNeedle = false;
+        }
+        if (this.state === 'headers') this.endHeadersAtDelimiter();
         this.candidate = true;
       }
     });
@@ -269,6 +290,8 @@ export class MultipartParser extends Writable {
       }
       this.suffix = Buffer.alloc(0);
       this.candidate = false;
+      const headerEndInNeedle = this.headerEndInNeedle;
+      this.headerEndInNeedle = false;
       if (delimiter.kind === 'close') {
         this.endPart();
         this.state = 'done';
@@ -278,11 +301,8 @@ export class MultipartParser extends Writable {
         data = data.subarray(delimiter.length - prior.length);
         this.endPart();
         this.beginPart();
-      } else if (this.state === 'body') {
-        // Not a delimiter: the matched bytes belong to the body. In the
-        // preamble they are discarded like any other preamble text.
-        this.consumeBody(this.needle);
-        this.consumeBody(prior);
+      } else {
+        this.flushNonDelimiter(prior, headerEndInNeedle);
       }
     }
 
@@ -311,6 +331,37 @@ export class MultipartParser extends Writable {
     } else if (this.state === 'body') {
       this.consumeBody(data);
     }
+  }
+
+  /**
+   * A needle match that turned out not to be a delimiter belongs to the
+   * body. In the preamble it is discarded like any other preamble text.
+   */
+  private flushNonDelimiter(prior: Buffer, headerEndInNeedle = this.headerEndInNeedle): void {
+    if (this.state !== 'body') return;
+    this.consumeBody(headerEndInNeedle ? this.needle.subarray(INITIAL_CRLF.length) : this.needle);
+    this.consumeBody(prior);
+  }
+
+  /**
+   * A delimiter candidate arrived before the header block's blank line.
+   * RFC 2046 lets a body part be headers only (`headers [CRLF *OCTET]`), so
+   * the needle's CRLF ends the block, which must itself end in CRLF or be
+   * empty. Whether the part also has a body is settled by the candidate.
+   */
+  private endHeadersAtDelimiter(): void {
+    const block = this.headerBytes;
+    if (block.length > 0 && !block.subarray(-INITIAL_CRLF.length).equals(INITIAL_CRLF)) {
+      throw new Error('Malformed part header');
+    }
+    const rawLength = block.length + INITIAL_CRLF.length;
+    if (rawLength > this.limits.maxHeaderBytes) throw new HeaderLimitError('bytes', rawLength);
+    const fields = block.subarray(0, Math.max(0, block.length - INITIAL_CRLF.length));
+    const headers = parseHeaders(fields, this.limits.maxHeaderPairs);
+    this.headerBytes = Buffer.alloc(0);
+    this.state = 'body';
+    this.headerEndInNeedle = true;
+    this.part?.emit('header', headers, Buffer.concat([block, INITIAL_CRLF]));
   }
 
   private consumeBody(data: Buffer): void {

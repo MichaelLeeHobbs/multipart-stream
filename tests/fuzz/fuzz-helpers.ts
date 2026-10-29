@@ -63,6 +63,11 @@ export interface GenPart {
   /** Header lines in wire order: [name, value]. Values are latin1 strings. */
   readonly headers: ReadonlyArray<readonly [string, string]>;
   readonly body: Buffer;
+  /**
+   * With an empty body, drop the CRLF that introduces the body section:
+   * RFC 2046 allows a part of headers only (`headers [CRLF *OCTET]`).
+   */
+  readonly omitBodySection?: boolean;
 }
 
 export interface GenEnvelope {
@@ -111,24 +116,20 @@ const headerValueChar = fc
   )
   .map((c) => String.fromCharCode(c));
 
-export const headerValue: fc.Arbitrary<string> = fc
-  .oneof(
-    { weight: 1, arbitrary: fc.constant('') },
-    {
-      weight: 2,
-      arbitrary: fc.constantFrom(
-        'text/plain',
-        'application/json',
-        '<cid@x>',
-        '42',
-        'multipart/related; boundary=inner',
-      ),
-    },
-    { weight: 8, arbitrary: fc.string({ unit: headerValueChar, maxLength: 40 }) },
-  )
-  // A value starting with SP/HTAB would be stripped once more on the wire
-  // than the builder adds; keep the round-trip exact by not generating one.
-  .filter((v) => !/^[ \t]/.test(v));
+export const headerValue: fc.Arbitrary<string> = fc.oneof(
+  { weight: 1, arbitrary: fc.constant('') },
+  {
+    weight: 2,
+    arbitrary: fc.constantFrom(
+      'text/plain',
+      'application/json',
+      '<cid@x>',
+      '42',
+      'multipart/related; boundary=inner',
+    ),
+  },
+  { weight: 8, arbitrary: fc.string({ unit: headerValueChar, maxLength: 40 }) },
+);
 
 /** Byte fragments that stress delimiter detection. */
 function trickyFragments(boundary: string): fc.Arbitrary<Buffer> {
@@ -166,6 +167,7 @@ export function partArb(boundary: string): fc.Arbitrary<GenPart> {
   return fc.record({
     headers: fc.array(fc.tuple(headerName, headerValue), { maxLength: 6 }),
     body: bodyBytes(boundary),
+    omitBodySection: fc.boolean(),
   });
 }
 
@@ -232,8 +234,7 @@ export function serialize(env: GenEnvelope, padding: readonly string[] = []): Se
     chunks.push(
       Buffer.from(`--${env.boundary}${padding[i] ?? ''}\r\n`),
       serializeHeaders(part.headers),
-      CRLF,
-      part.body,
+      ...(part.omitBodySection === true && part.body.length === 0 ? [] : [CRLF, part.body]),
       CRLF,
     );
   });
@@ -250,7 +251,8 @@ export function expectedHeaders(headers: GenPart['headers']): Record<string, str
   for (const [n, v] of headers) {
     const k = n.toLowerCase();
     const list = grouped.get(k) ?? [];
-    list.push(v);
+    // Whitespace around a field value is not part of it.
+    list.push(v.replace(/^[ \t]+|[ \t]+$/g, ''));
     grouped.set(k, list);
   }
   const out: Record<string, string> = Object.create(null) as Record<string, string>;

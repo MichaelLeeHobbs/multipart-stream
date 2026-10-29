@@ -151,28 +151,26 @@ async function* parseMultipartRelatedImpl(
   //    the first `.next()` instead of inside a stream listener. Timeouts are
   //    validated FIRST so callers get the precise NFR-DR-S-009 message even
   //    if their input is also malformed.
-  const idleTimeoutMs = opts.idleTimeoutMs;
-  const totalTimeoutMs = opts.totalTimeoutMs;
-  validatePositiveTimeout('idleTimeoutMs', idleTimeoutMs);
-  validatePositiveTimeout('totalTimeoutMs', totalTimeoutMs);
-
-  // Resource caps (kiln/spec/api.md §2, review-security.md F-S-001/004/012):
-  //   - maxPartBytes: undefined => no cap (NFR-DR-S-001).
-  //   - maxParts: undefined => default 10_000 (NFR-DR-S-012).
-  //   - maxHeadersPerPart: undefined => default 100 (NFR-DR-S-004).
-  //   - maxHeaderBytesPerPart: undefined => default 16_384 (NFR-DR-S-004).
-  const maxPartBytes = validateOptionalCap('maxPartBytes', opts.maxPartBytes);
-  const maxParts = validateOptionalCap('maxParts', opts.maxParts) ?? 10_000;
-  const maxHeadersPerPart = validateOptionalCap('maxHeadersPerPart', opts.maxHeadersPerPart) ?? 100;
-  const maxHeaderBytesPerPart =
-    validateOptionalCap('maxHeaderBytesPerPart', opts.maxHeaderBytesPerPart) ?? 16_384;
-  const callerSignal = opts.signal;
-  const onProgress = opts.onProgress;
-
-  // 2. Logger fallback (FR-018 / JC-2). A logger that throws must not escape
-  //    from a stream listener, so resolveLogger reports its failure to the
-  //    default sink instead.
-  const logger = resolveLogger(opts.logger);
+  let validated: ReturnType<typeof readOptions>;
+  try {
+    validated = readOptions(opts);
+  } catch (err) {
+    // A Response body holds its connection open until it is read or
+    // cancelled, so a rejected options bag must still release it (US-007).
+    cancelResponseBody(input, resolveLogger(undefined));
+    throw err;
+  }
+  const {
+    idleTimeoutMs,
+    totalTimeoutMs,
+    maxPartBytes,
+    maxParts,
+    maxHeadersPerPart,
+    maxHeaderBytesPerPart,
+    callerSignal,
+    onProgress,
+    logger,
+  } = validated;
 
   let normalized: ReturnType<typeof normalizeInput>;
   try {
@@ -214,6 +212,13 @@ async function* parseMultipartRelatedImpl(
   // flags).
   // Each entry maps to the parser part stream that feeds it.
   const allPartStreams = new Map<Readable, MultipartPartStream>();
+  // A closed stream holds no buffered data, so it is dropped at once rather
+  // than kept until cleanup (a long envelope would otherwise retain every
+  // part it has delivered).
+  const track = (stream: Readable, origin: MultipartPartStream): void => {
+    allPartStreams.set(stream, origin);
+    stream.once('close', () => allPartStreams.delete(stream));
+  };
 
   // Translate the parser's internal errors into the public typed errors.
   // The truncation error is memoized so the iterator and every failed body
@@ -307,7 +312,7 @@ async function* parseMultipartRelatedImpl(
   //    early errors surface via the queue rather than being lost.
   const onPart = (partStream: MultipartPartStream): void => {
     // The parser emits the part before its headers so this listener is ready.
-    allPartStreams.set(partStream, partStream);
+    track(partStream, partStream);
     const partIndex = nextPartIndex++;
     // Per-part 'error' bridge: without a listener, a body failed by `fail`
     // would raise an uncaughtException when the consumer is not reading it.
@@ -366,7 +371,7 @@ async function* parseMultipartRelatedImpl(
             callback(null, chunk);
           },
         });
-        allPartStreams.set(counter, partStream);
+        track(counter, partStream);
         // The parser can finish while an overflowing chunk still waits in
         // the counter, so the end of the envelope is held until every
         // counter has settled (see maybeSignalEnd).
@@ -535,4 +540,41 @@ function cancelResponseBody(input: unknown, logger: Logger): void {
       meta: { errSummary: summarizeError(err) },
     });
   });
+}
+
+/** Reads and validates every option once (step 1 of the generator). */
+function readOptions(opts: Partial<ParseMultipartOptions>) {
+  const idleTimeoutMs = opts.idleTimeoutMs;
+  const totalTimeoutMs = opts.totalTimeoutMs;
+  validatePositiveTimeout('idleTimeoutMs', idleTimeoutMs);
+  validatePositiveTimeout('totalTimeoutMs', totalTimeoutMs);
+
+  // Resource caps (kiln/spec/api.md §2, review-security.md F-S-001/004/012):
+  //   - maxPartBytes: undefined => no cap (NFR-DR-S-001).
+  //   - maxParts: undefined => default 10_000 (NFR-DR-S-012).
+  //   - maxHeadersPerPart: undefined => default 100 (NFR-DR-S-004).
+  //   - maxHeaderBytesPerPart: undefined => default 16_384 (NFR-DR-S-004).
+  const maxPartBytes = validateOptionalCap('maxPartBytes', opts.maxPartBytes);
+  const maxParts = validateOptionalCap('maxParts', opts.maxParts) ?? 10_000;
+  const maxHeadersPerPart = validateOptionalCap('maxHeadersPerPart', opts.maxHeadersPerPart) ?? 100;
+  const maxHeaderBytesPerPart =
+    validateOptionalCap('maxHeaderBytesPerPart', opts.maxHeaderBytesPerPart) ?? 16_384;
+  const callerSignal = opts.signal;
+  const onProgress = opts.onProgress;
+
+  // 2. Logger fallback (FR-018 / JC-2). A logger that throws must not escape
+  //    from a stream listener, so resolveLogger reports its failure to the
+  //    default sink instead.
+  const logger = resolveLogger(opts.logger);
+  return {
+    idleTimeoutMs,
+    totalTimeoutMs,
+    maxPartBytes,
+    maxParts,
+    maxHeadersPerPart,
+    maxHeaderBytesPerPart,
+    callerSignal,
+    onProgress,
+    logger,
+  };
 }

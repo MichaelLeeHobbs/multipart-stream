@@ -42,7 +42,8 @@ export interface StreamingMultipartPart {
 
   /**
    * Lowercased part headers as flat strings. Names are normalized to
-   * lowercase; repeated values are joined with `, `. Like Node's
+   * lowercase; values have surrounding spaces and tabs trimmed, and
+   * repeated values are joined with `, `. Like Node's
    * `IncomingMessage.headers`, the object has a `null` prototype, so only
    * received headers are present (`headers.constructor` is `undefined`).
    *
