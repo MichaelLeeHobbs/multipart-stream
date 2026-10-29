@@ -768,7 +768,6 @@ For traceability — these MUST stay in `src/internal/` and MUST NOT appear in `
 
 - `flattenDicerHeaders`
 - `flattenHeaderValue`
-- `sanitizeFileName`
 - `deriveNameFromContentId`
 - `formatErrorEmbed` (NFR-DR-S-006 sanitizer)
 - `END` sentinel
